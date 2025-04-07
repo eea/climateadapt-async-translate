@@ -2,7 +2,7 @@
 start:
 	npm run start
 
-all: build-docker publish
+docker-release: build-docker publish
 	@echo "Building"
 
 .PHONY: build-docker
