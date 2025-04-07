@@ -1,3 +1,7 @@
+.PHONY: start
+start:
+	npm run start
+
 all: build-docker publish
 	@echo "Building"
 
