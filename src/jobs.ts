@@ -64,7 +64,7 @@ async function call_plone_for_etranslation(data: CallETranslation) {
 
 async function save_translation_to_plone(data: SaveTranslation) {
   const { obj_path, html } = data;
-  const fragpath = obj_path.startsWith("/") ? obj_path : `/${obj_path}`;
+  const fragpath = obj_path.startsWith("/en") ? obj_path : `/en/${obj_path}`;
   const url_path = `http://example.com${fragpath}`;
   const url = new URL(url_path);
   const form = dataToForm({
