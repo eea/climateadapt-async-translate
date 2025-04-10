@@ -68,7 +68,9 @@ async function save_translation_to_plone(data: SaveTranslation) {
     ? obj_path
     : obj_path.startsWith("en/")
       ? `/${obj_path}`
-      : `/en/${obj_path}`;
+      : obj_path.startsWith("cca")
+        ? obj_path.replace("cca/", "/")
+        : `/en/${obj_path}`;
   const url_path = `http://example.com${fragpath}`;
   const url = new URL(url_path);
   const form = dataToForm({
