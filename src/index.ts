@@ -32,8 +32,8 @@ function setupBullMQProcessor(queueName: string) {
     },
     {
       connection,
-      removeOnComplete: { count: 1000 },
-      removeOnFail: { count: 5000 },
+      removeOnComplete: { count: 100000 },
+      removeOnFail: { count: 500000 },
       concurrency: 1,
     },
   );
