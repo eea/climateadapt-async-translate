@@ -56,6 +56,10 @@ async function call_plone_for_etranslation(data: CallETranslation) {
     throw result.error_type;
   }
 
+  if (result.transId < 0) {
+    throw new Error("eTranslation not queued");
+  }
+
   return result;
 
   // mock implementation, we call Plone just like eTranslation would do
