@@ -4,6 +4,7 @@ import type {
   TypeJobsMapping,
 } from "./types";
 import mockData from "./mock-data.json";
+import { RateLimitError } from "bullmq";
 
 const PORTAL_URL = process.env.PORTAL_URL || "http://localhost:8080/cca";
 
@@ -57,7 +58,7 @@ async function call_plone_for_etranslation(data: CallETranslation) {
   }
 
   if (result.transId < 0) {
-    throw new Error("eTranslation not queued");
+    throw new RateLimitError("eTranslation not queued");
   }
 
   return result;

@@ -2,13 +2,16 @@ import { JOBS_MAPPING } from "./jobs";
 import { createBullBoard } from "@bull-board/api";
 import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
 import { FastifyAdapter } from "@bull-board/fastify";
-import { Queue, Worker } from "bullmq";
+import { Queue, Worker, RateLimitError } from "bullmq";
 import { fastifyQueueDashPlugin } from "@queuedash/api";
 
 import fastify from "fastify";
 import IORedis from "ioredis";
 
 const port = parseInt(process.env.PORT || "3000");
+const enabledJobs = (
+  process.env.ENABLED_JOBS || "call_etranslation,save_translated_html"
+).split(",");
 
 const connection = new IORedis({
   maxRetriesPerRequest: null,
@@ -16,18 +19,30 @@ const connection = new IORedis({
   host: process.env.REDIS_HOST || "0.0.0.0",
 });
 
-const createQueueMQ = (name: string) => new Queue(name, { connection });
+const createQueueMQ = (name: string) =>
+  new Queue(name, {
+    connection,
+    defaultJobOptions: {
+      backoff: {
+        type: "exponential",
+        delay: 1000,
+      },
+    },
+  });
 
 function setupBullMQProcessor(queueName: string) {
   new Worker(
     queueName,
     async (job) => {
+      if (enabledJobs.indexOf(job.name) === -1) {
+        throw new RateLimitError();
+      }
       const handler = JOBS_MAPPING[job.name];
       if (handler) {
         const result = await handler(job.data);
         return { jobId: job.id, result };
       } else {
-        return { jobId: job.id };
+        throw new Error(`Handler not found for job ${job.name}`);
       }
     },
     {
