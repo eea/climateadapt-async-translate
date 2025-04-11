@@ -24,8 +24,8 @@ const createQueueMQ = (name: string) =>
     connection,
     defaultJobOptions: {
       backoff: {
-        type: "exponential",
         delay: 1000,
+        type: "exponential",
       },
     },
   });
@@ -61,6 +61,13 @@ function setupBullMQProcessor(queueName: string) {
       removeOnComplete: { count: 100000 },
       removeOnFail: { count: 500000 },
       concurrency: 1,
+      settings: {
+        backoffStrategy: function (attemptsMade, type_, err, job) {
+          const res = 5000 + Math.random() * 500;
+          console.log("backoff", res, attemptsMade, type_, err, job);
+          return res;
+        },
+      },
     },
   );
 }
