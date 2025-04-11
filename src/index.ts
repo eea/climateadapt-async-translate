@@ -48,7 +48,7 @@ function setupBullMQProcessor(queueName: string) {
           if (error instanceof RateLimitError) {
             console.log("Backing off due to rate limit");
             await job.log("Backing off due to rate limit");
-            worker.rateLimit(5000);
+            // worker.rateLimit(5000);
             throw Worker.RateLimitError();
           }
         }
@@ -63,7 +63,7 @@ function setupBullMQProcessor(queueName: string) {
       concurrency: 1,
       settings: {
         backoffStrategy: function (attemptsMade, type_, err, job) {
-          const res = 5000 + Math.random() * 500;
+          const res = 10000 + Math.random() * 500;
           console.log("backoff", res, attemptsMade, type_, err, job);
           return res;
         },
