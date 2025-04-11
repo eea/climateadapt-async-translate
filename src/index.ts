@@ -31,16 +31,25 @@ const createQueueMQ = (name: string) =>
   });
 
 function setupBullMQProcessor(queueName: string) {
-  new Worker(
+  const worker = new Worker(
     queueName,
     async (job) => {
       if (enabledJobs.indexOf(job.name) === -1) {
-        throw new RateLimitError();
+        throw Worker.RateLimitError();
       }
+
       const handler = JOBS_MAPPING[job.name];
+
       if (handler) {
-        const result = await handler(job.data);
-        return { jobId: job.id, result };
+        try {
+          const result = await handler(job.data);
+          return { jobId: job.id, result };
+        } catch (error) {
+          if (error instanceof RateLimitError) {
+            worker.rateLimit(5000);
+            throw Worker.RateLimitError();
+          }
+        }
       } else {
         throw new Error(`Handler not found for job ${job.name}`);
       }
