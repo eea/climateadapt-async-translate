@@ -40,7 +40,8 @@ function setupBullMQProcessor(queueName: string) {
 }
 
 function readQueuesFromEnv() {
-  const qStr = process.env.BULL_QUEUE_NAMES_CSV || "etranslation";
+  const qStr =
+    process.env.BULL_QUEUE_NAMES_CSV || "etranslation,save_etranslation";
   try {
     const qs = qStr.split(",");
     return qs.map((q) => q.trim());
