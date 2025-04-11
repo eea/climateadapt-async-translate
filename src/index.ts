@@ -24,7 +24,7 @@ const createQueueMQ = (name: string) =>
     connection,
     defaultJobOptions: {
       backoff: {
-        delay: 1000,
+        delay: 10000,
         type: "exponential",
       },
     },
