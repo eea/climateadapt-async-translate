@@ -35,6 +35,9 @@ function setupBullMQProcessor(queueName: string) {
     queueName,
     async (job) => {
       if (enabledJobs.indexOf(job.name) === -1) {
+        console.warn(
+          `Job will not be scheduled, worker is configured to ignore it: ${job.name} - ${job.id}`,
+        );
         throw Worker.RateLimitError();
       }
 
@@ -42,6 +45,7 @@ function setupBullMQProcessor(queueName: string) {
 
       if (handler) {
         try {
+          console.log(`Picked up job ${job.name} - ${job.id}`);
           const result = await handler(job.data);
           return { jobId: job.id, result };
         } catch (error) {
