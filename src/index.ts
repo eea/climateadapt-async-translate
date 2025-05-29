@@ -16,6 +16,7 @@ const port = parseInt(process.env.PORT || "3000");
 const enabledJobs = (process.env.ENABLED_JOBS || DEFAULT_ENABLED_JOBS).split(
   ",",
 );
+const enabledQueues = readQueuesFromEnv();
 
 const connection = new IORedis({
   maxRetriesPerRequest: null,
@@ -92,7 +93,7 @@ function readQueuesFromEnv() {
 }
 
 const run = async () => {
-  const queues = readQueuesFromEnv().map((q) => createQueueMQ(q));
+  const queues = enabledQueues.map((q) => createQueueMQ(q));
 
   queues.forEach((q) => {
     setupBullMQProcessor(q.name);
@@ -152,6 +153,8 @@ const run = async () => {
   console.log(
     "Make sure Redis is configured in env variables. See .env.example",
   );
+  console.log(`Enabled jobs: ${enabledJobs}`);
+  console.log(`Enabled queues: ${enabledQueues}`);
 };
 
 run().catch((e) => {
