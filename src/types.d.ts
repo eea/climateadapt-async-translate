@@ -15,3 +15,10 @@ export type SaveTranslation = {
   obj_path: string;
   html: string;
 };
+
+export type MoveInfo = {
+  oldName: string;
+  newName: string;
+  oldParent: string;
+  newParent: string;
+};

@@ -1,5 +1,6 @@
 import type {
   CallETranslation,
+  MoveInfo,
   SaveTranslation,
   TypeJobsMapping,
 } from "./types";
@@ -30,7 +31,7 @@ export async function mockTranslationCallback(obj_path: string) {
   return result;
 }
 
-async function call_plone_for_etranslation(data: CallETranslation) {
+async function call_etranslation(data: CallETranslation) {
   // TODO: reimplement the call here directly
   const obj_path = `${data.obj_url}?serial_id=${data.serial_id}&language=${data.language}`;
 
@@ -67,7 +68,7 @@ async function call_plone_for_etranslation(data: CallETranslation) {
   // await mockTranslationCallback(obj_path);
 }
 
-async function save_translation_to_plone(data: SaveTranslation) {
+async function save_translated_html(data: SaveTranslation) {
   const { obj_path, html } = data;
   const fragpath = obj_path.startsWith("/en")
     ? obj_path
@@ -101,7 +102,26 @@ async function save_translation_to_plone(data: SaveTranslation) {
   return result;
 }
 
+async function sync_translated_paths(data: MoveInfo) {
+  const form = dataToForm(data);
+  const response = await fetch(`${PORTAL_URL}/@@sync-translated-paths`, {
+    method: "POST",
+    body: form,
+    headers: {
+      Authentication: process.env.TRANSLATION_AUTH_TOKEN || "",
+    },
+  });
+  const result = await response.json();
+  console.log("Save translation result", result);
+
+  if (result.error_type) {
+    throw result.error_type;
+  }
+  return result;
+}
+
 export const JOBS_MAPPING: TypeJobsMapping = {
-  call_etranslation: call_plone_for_etranslation,
-  save_translated_html: save_translation_to_plone,
+  call_etranslation,
+  save_translated_html,
+  sync_translated_paths,
 };

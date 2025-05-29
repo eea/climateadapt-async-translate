@@ -8,10 +8,14 @@ import { fastifyQueueDashPlugin } from "@queuedash/api";
 import fastify from "fastify";
 import IORedis from "ioredis";
 
+const DEFAULT_ENABLED_JOBS =
+  "call_etranslation,save_translated_html,sync_translated_paths";
+const DEFAULT_QUEUES = "etranslation,save_etranslation,sync_paths";
+
 const port = parseInt(process.env.PORT || "3000");
-const enabledJobs = (
-  process.env.ENABLED_JOBS || "call_etranslation,save_translated_html"
-).split(",");
+const enabledJobs = (process.env.ENABLED_JOBS || DEFAULT_ENABLED_JOBS).split(
+  ",",
+);
 
 const connection = new IORedis({
   maxRetriesPerRequest: null,
@@ -77,8 +81,7 @@ function setupBullMQProcessor(queueName: string) {
 }
 
 function readQueuesFromEnv() {
-  const qStr =
-    process.env.BULL_QUEUE_NAMES_CSV || "etranslation,save_etranslation";
+  const qStr = process.env.BULL_QUEUE_NAMES_CSV || DEFAULT_QUEUES;
   try {
     const qs = qStr.split(",");
     return qs.map((q) => q.trim());
@@ -122,21 +125,21 @@ const run = async () => {
     return reply.redirect("/ui", 302);
   });
 
-  app.get("/add", (req, reply) => {
-    const opts = (req.query as any).opts || {};
-
-    if (opts.delay) {
-      opts.delay = +opts.delay * 1000; // delay must be a number
-    }
-
-    queues.forEach((queue) =>
-      queue.add("Add", { title: (req.query as any).title }, opts),
-    );
-
-    reply.send({
-      ok: true,
-    });
-  });
+  // app.get("/add", (req, reply) => {
+  //   const opts = (req.query as any).opts || {};
+  //
+  //   if (opts.delay) {
+  //     opts.delay = +opts.delay * 1000; // delay must be a number
+  //   }
+  //
+  //   queues.forEach((queue) =>
+  //     queue.add("Add", { title: (req.query as any).title }, opts),
+  //   );
+  //
+  //   reply.send({
+  //     ok: true,
+  //   });
+  // });
 
   app.get("/status", (req, reply) => {
     console.log(connection.status);
@@ -149,10 +152,6 @@ const run = async () => {
   console.log(
     "Make sure Redis is configured in env variables. See .env.example",
   );
-  console.log("To populate the queue, run:");
-  console.log(`  curl http://localhost:${port}/add?title=Example`);
-  console.log("To populate the queue with custom options (opts), run:");
-  console.log(`  curl http://localhost:${port}/add?title=Test&opts[delay]=9`);
 };
 
 run().catch((e) => {
