@@ -59,6 +59,10 @@ function setupBullMQProcessor(queueName: string) {
             await job.log("Backing off due to rate limit");
             // worker.rateLimit(5000);
             throw Worker.RateLimitError();
+          } else {
+            console.log(`Error in job ${error}`);
+            await job.log(`Error in job ${error}`);
+            throw error;
           }
         }
       } else {
