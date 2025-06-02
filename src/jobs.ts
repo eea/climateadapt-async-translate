@@ -8,6 +8,8 @@ import mockData from "./mock-data.json";
 import { RateLimitError } from "bullmq";
 
 const PORTAL_URL = process.env.PORTAL_URL || "http://localhost:8080/cca";
+const TRANSLATION_AUTH_TOKEN =
+  process.env.TRANSLATION_AUTH_TOKEN || "hello1234";
 
 console.log("Portal URL: ", PORTAL_URL);
 
@@ -48,7 +50,7 @@ async function call_etranslation(data: CallETranslation) {
     method: "POST",
     body: form,
     headers: {
-      Authentication: process.env.TRANSLATION_AUTH_TOKEN || "hello1234",
+      Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
   const result = await response.json();
@@ -90,7 +92,7 @@ async function save_translated_html(data: SaveTranslation) {
     method: "POST",
     body: form,
     headers: {
-      Authentication: process.env.TRANSLATION_AUTH_TOKEN || "",
+      Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
   const result = await response.json();
@@ -108,7 +110,7 @@ async function sync_translated_paths(data: MoveInfo) {
     method: "POST",
     body: form,
     headers: {
-      Authentication: process.env.TRANSLATION_AUTH_TOKEN || "",
+      Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
   const result = await response.json();

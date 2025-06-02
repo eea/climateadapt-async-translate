@@ -21,4 +21,5 @@ export type MoveInfo = {
   newName: string;
   oldParent: string;
   newParent: string;
+  langs?: string[];
 };
