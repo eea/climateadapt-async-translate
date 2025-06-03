@@ -26,9 +26,9 @@
     "typescript-eslint": "^8.25.0"
   },
   "dependencies": {
-    "@bull-board/api": "^6.7.10",
-    "@bull-board/fastify": "^6.7.10",
-    "@queuedash/api": "^3.5.0",
+    "@bull-board/api": "^6.9.6",
+    "@bull-board/fastify": "^6.9.6",
+    "@queuedash/api": "^3.6.0",
     "bullmq": "^5.53.1",
     "fastify": "^5.2.1",
     "ioredis": "^5.5.0",
