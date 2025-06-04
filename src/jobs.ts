@@ -114,18 +114,13 @@ async function sync_translated_paths(data: MoveInfo) {
     },
   });
 
-  try {
-    const result = await response.json();
-    console.log("Sync translation result", result);
+  const result = await response.json();
+  console.log("Sync translation result", result);
 
-    if (result.error_type) {
-      throw result.error_type;
-    }
-    return result;
-  } catch (e) {
-    console.log(response.text());
-    throw e;
+  if (result.error_type) {
+    throw result.error_type;
   }
+  return result;
 }
 
 export const JOBS_MAPPING: TypeJobsMapping = {
