@@ -60,8 +60,8 @@ function setupBullMQProcessor(queueName: string) {
             // worker.rateLimit(5000);
             throw Worker.RateLimitError();
           } else {
-            console.log(`Error in job ${error}`);
-            await job.log(`Error in job ${error}`);
+            console.log(`Error in job ${JSON.stringify(error)}`);
+            await job.log(`Error in job ${JSON.stringify(error)}`);
             throw error;
           }
         }
