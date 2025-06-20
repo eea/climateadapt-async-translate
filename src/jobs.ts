@@ -118,7 +118,11 @@ async function sync_translated_paths(data: MoveInfo) {
   console.log("Sync translation result", result);
 
   if (result.error_type) {
-    throw result.error_type;
+    if (result.error_type) {
+      throw result.error_type;
+    } else {
+      throw result;
+    }
   }
   return result;
 }
