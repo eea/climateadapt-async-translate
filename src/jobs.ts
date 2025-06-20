@@ -113,22 +113,25 @@ async function sync_translated_paths(data: MoveInfo) {
       Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
+  const contentType = response.headers.get("Content-Type");
 
   let result: any;
-  try {
-    result = await response.json();
-  } catch (error) {
+  if (contentType === "application/json") {
+    try {
+      result = await response.json();
+    } catch (error) {
+      result = { error_type: error };
+    }
+  } else {
     result = { error_type: await response.text() };
   }
+
   console.log("Sync translation result", result);
 
   if (result.error_type) {
-    if (result.error_type) {
-      throw result.error_type;
-    } else {
-      throw result;
-    }
+    throw result.error_type;
   }
+
   return result;
 }
 
