@@ -114,7 +114,12 @@ async function sync_translated_paths(data: MoveInfo) {
     },
   });
 
-  const result = await response.json();
+  let result: any;
+  try {
+    result = await response.json();
+  } catch (error) {
+    result = { error_type: await response.text() };
+  }
   console.log("Sync translation result", result);
 
   if (result.error_type) {
