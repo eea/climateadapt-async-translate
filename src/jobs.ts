@@ -95,7 +95,19 @@ async function save_translated_html(data: SaveTranslation) {
       Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
-  const result = await response.json();
+  const contentType = response.headers.get("Content-Type");
+
+  let result: any;
+  if (contentType === "application/json") {
+    try {
+      result = await response.json();
+    } catch (error) {
+      result = { error_type: error };
+    }
+  } else {
+    result = { error_type: await response.text() };
+  }
+
   console.log("Save translation result", result);
 
   if (result.error_type) {
