@@ -35,6 +35,12 @@ const createQueueMQ = (name: string) =>
     },
   });
 
+// Picked up job save_translated_html - 469637
+// Save translation result {
+//   error_type: '{"url": "https://climate-adapt.eea.europa.eu/ga/observatory"}'
+// }
+// Error in job {"url": "https://climate-adapt.eea.europa.eu/ga/observatory"}
+
 function setupBullMQProcessor(queueName: string) {
   const worker = new Worker(
     queueName,

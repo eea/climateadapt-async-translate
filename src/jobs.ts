@@ -95,17 +95,22 @@ async function save_translated_html(data: SaveTranslation) {
       Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
+
   const contentType = response.headers.get("Content-Type");
+  console.log("Content-Type", contentType);
 
   let result: any;
   if (contentType === "application/json") {
     try {
       result = await response.json();
     } catch (error) {
-      result = { error_type: error };
+      result = {
+        error_type: error,
+        reason: "Error converting response to json",
+      };
     }
   } else {
-    result = { error_type: await response.text() };
+    result = { error_type: await response.text(), reason: "Unknown failure" };
   }
 
   console.log("Save translation result", result);
