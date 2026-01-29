@@ -9,6 +9,7 @@ export type CallETranslation = {
   language: string;
   obj_url: string;
   serial_id: number;
+  obj_uid?: string;
 };
 
 export type SaveTranslation = {
@@ -22,4 +23,5 @@ export type MoveInfo = {
   oldParent: string;
   newParent: string;
   langs?: string[];
+  expected_uid?: string;
 };

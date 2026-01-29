@@ -35,7 +35,8 @@ export async function mockTranslationCallback(obj_path: string) {
 
 async function call_etranslation(data: CallETranslation) {
   // TODO: reimplement the call here directly
-  const obj_path = `${data.obj_url}?serial_id=${data.serial_id}&language=${data.language}`;
+  const obj_path = `${data.obj_url}?serial_id=${data.serial_id}&language=${data.language
+    }${data.obj_uid ? `&obj_uid=${data.obj_uid}` : ""}`;
 
   // here we call plone view which calls eTranslation with the necessary info
   console.log(`Calling eTranslation for ${obj_path}`);
@@ -44,6 +45,7 @@ async function call_etranslation(data: CallETranslation) {
     html: data.html,
     target_lang: data.language,
     obj_path,
+    obj_uid: data.obj_uid || "",
   });
 
   const response = await fetch(`${PORTAL_URL}/@@call-etranslation`, {
@@ -86,6 +88,7 @@ async function save_translated_html(data: SaveTranslation) {
     html,
     language: url.searchParams.get("language") || "missing",
     serial_id: url.searchParams.get("serial_id") || "missing",
+    obj_uid: url.searchParams.get("obj_uid") || "",
   });
 
   const response = await fetch(`${PORTAL_URL}/@@save-etranslation`, {
