@@ -46,6 +46,20 @@ The service handles three main types of jobs, defined in `src/jobs.ts`:
 - **Action**: Calls Plone's `@@sync-translated-paths` view.
 - **Goal**: Ensures that all translation objects are moved to the corresponding new paths.
 
+### 4. `delete_translation`
+- **Triggered by**: Plone when a canonical object is deleted.
+- **Action**: Calls Plone's `@@delete-translation` view.
+- **Goal**: Safely removes all linked translation objects by UID.
+
+## Queues
+
+The service monitors the following queues by default (configurable via `BULL_QUEUE_NAMES_CSV`):
+
+- **`etranslation`**: Used for `call_etranslation` jobs.
+- **`save_etranslation`**: Used for `save_translated_html` jobs.
+- **`sync_paths`**: Used for `sync_translated_paths` jobs.
+- **`delete_translation`**: Used for `delete_translation` jobs.
+
 ## Monitoring and UI
 
 The service provides two interfaces for monitoring:

@@ -9,8 +9,8 @@ import fastify from "fastify";
 import IORedis from "ioredis";
 
 const DEFAULT_ENABLED_JOBS =
-  "call_etranslation,save_translated_html,sync_translated_paths";
-const DEFAULT_QUEUES = "etranslation,save_etranslation,sync_paths";
+  "call_etranslation,save_translated_html,sync_translated_paths,delete_translation";
+const DEFAULT_QUEUES = "etranslation,save_etranslation,sync_paths,delete_translation";
 
 const port = parseInt(process.env.PORT || "3000");
 const enabledJobs = (process.env.ENABLED_JOBS || DEFAULT_ENABLED_JOBS).split(
