@@ -56,7 +56,24 @@ async function call_etranslation(data: CallETranslation) {
       Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
-  const result = await response.json();
+
+  const contentType = response.headers.get("Content-Type");
+  console.log("Content-Type", contentType);
+
+  let result: any;
+  if (contentType === "application/json") {
+    try {
+      result = await response.json();
+    } catch (error) {
+      result = {
+        error_type: error,
+        reason: "Error converting response to json",
+      };
+    }
+  } else {
+    result = { error_type: await response.text(), reason: "Unknown failure" };
+  }
+
   console.log("Call ETranslation Result", result);
 
   if (result.error_type) {
@@ -68,9 +85,6 @@ async function call_etranslation(data: CallETranslation) {
   }
 
   return result;
-
-  // mock implementation, we call Plone just like eTranslation would do
-  // await mockTranslationCallback(obj_path);
 }
 
 async function save_translated_html(data: SaveTranslation) {
