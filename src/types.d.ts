@@ -22,6 +22,9 @@ export type MoveInfo = {
   newName: string;
   oldParent: string;
   newParent: string;
-  langs?: string[];
   expected_uid?: string;
+};
+
+export type DeleteTranslation = {
+  uids: string[];
 };

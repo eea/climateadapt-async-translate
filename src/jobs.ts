@@ -3,6 +3,7 @@ import type {
   MoveInfo,
   SaveTranslation,
   TypeJobsMapping,
+  DeleteTranslation,
 } from "./types";
 import mockData from "./mock-data.json";
 import { RateLimitError } from "bullmq";
@@ -155,8 +156,41 @@ async function sync_translated_paths(data: MoveInfo) {
   return result;
 }
 
+async function delete_translation(data: DeleteTranslation) {
+  const form = dataToForm({ uids: JSON.stringify(data.uids) });
+  const response = await fetch(`${PORTAL_URL}/@@delete-translation`, {
+    method: "POST",
+    body: form,
+    headers: {
+      Authentication: TRANSLATION_AUTH_TOKEN,
+    },
+  });
+
+  const contentType = response.headers.get("Content-Type");
+
+  let result: any;
+  if (contentType === "application/json") {
+    try {
+      result = await response.json();
+    } catch (error) {
+      result = { error_type: error };
+    }
+  } else {
+    result = { error_type: await response.text() };
+  }
+
+  console.log("Delete translation result", result);
+
+  if (result.error_type) {
+    throw result.error_type;
+  }
+
+  return result;
+}
+
 export const JOBS_MAPPING: TypeJobsMapping = {
   call_etranslation,
   save_translated_html,
   sync_translated_paths,
+  delete_translation,
 };
