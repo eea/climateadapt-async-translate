@@ -6,7 +6,7 @@ import type {
   DeleteTranslation,
 } from "./types";
 import mockData from "./mock-data.json";
-import { RateLimitError } from "bullmq";
+import { RateLimitError, Job } from "bullmq";
 
 const PORTAL_URL = process.env.PORTAL_URL || "http://localhost:8080/cca";
 const TRANSLATION_AUTH_TOKEN =
@@ -51,13 +51,15 @@ export async function mockTranslationCallback(obj_path: string) {
   return result;
 }
 
-async function call_etranslation(data: CallETranslation) {
+async function call_etranslation(data: CallETranslation, job?: Job) {
   // TODO: reimplement the call here directly
   const obj_path = `${data.obj_url}?serial_id=${data.serial_id}&language=${data.language
     }${data.obj_uid ? `&obj_uid=${data.obj_uid}` : ""}`;
 
   // here we call plone view which calls eTranslation with the necessary info
-  console.log(`Calling eTranslation for ${obj_path}`);
+  const startMsg = `Calling eTranslation for ${obj_path}`;
+  console.log(startMsg);
+  if (job) await job.log(startMsg);
 
   const form = dataToForm({
     html: data.html,
@@ -76,8 +78,6 @@ async function call_etranslation(data: CallETranslation) {
 
   const result = await processResponse(response);
 
-  console.log("Call ETranslation Result", result);
-
   if (result.error_type) {
     throw result.error_type;
   }
@@ -89,7 +89,7 @@ async function call_etranslation(data: CallETranslation) {
   return result;
 }
 
-async function save_translated_html(data: SaveTranslation) {
+async function save_translated_html(data: SaveTranslation, job?: Job) {
   const { obj_path, html } = data;
   const fragpath = obj_path.startsWith("/en")
     ? obj_path
@@ -108,6 +108,10 @@ async function save_translated_html(data: SaveTranslation) {
     obj_uid: url.searchParams.get("obj_uid") || "",
   });
 
+  const logMsg = `Saving translated HTML to ${url.pathname}`;
+  console.log(logMsg);
+  if (job) await job.log(logMsg);
+
   const response = await fetch(`${PORTAL_URL}/@@save-etranslation`, {
     method: "POST",
     body: form,
@@ -118,15 +122,16 @@ async function save_translated_html(data: SaveTranslation) {
 
   const result = await processResponse(response);
 
-  console.log("Save translation result", result);
-
   if (result.error_type) {
     throw result.error_type;
   }
   return result;
 }
 
-async function sync_translated_paths(data: MoveInfo) {
+async function sync_translated_paths(data: MoveInfo, job?: Job) {
+  const logMsg = `Syncing translated paths: ${data.oldName} -> ${data.newName}`;
+  console.log(logMsg);
+  if (job) await job.log(logMsg);
   const form = dataToForm(data);
   const response = await fetch(`${PORTAL_URL}/@@sync-translated-paths`, {
     method: "POST",
@@ -138,8 +143,6 @@ async function sync_translated_paths(data: MoveInfo) {
 
   const result = await processResponse(response);
 
-  console.log("Sync translation result", result);
-
   if (result.error_type) {
     throw result.error_type;
   }
@@ -147,7 +150,10 @@ async function sync_translated_paths(data: MoveInfo) {
   return result;
 }
 
-async function delete_translation(data: DeleteTranslation) {
+async function delete_translation(data: DeleteTranslation, job?: Job) {
+  const logMsg = `Deleting translations for UIDs: ${data.uids.join(", ")}`;
+  console.log(logMsg);
+  if (job) await job.log(logMsg);
   const form = dataToForm({ uids: JSON.stringify(data.uids) });
   const response = await fetch(`${PORTAL_URL}/@@delete-translation`, {
     method: "POST",
@@ -158,8 +164,6 @@ async function delete_translation(data: DeleteTranslation) {
   });
 
   const result = await processResponse(response);
-
-  console.log("Delete translation result", result);
 
   if (result.error_type) {
     throw result.error_type;

@@ -57,7 +57,23 @@ function setupBullMQProcessor(queueName: string) {
       if (handler) {
         try {
           console.log(`Picked up job ${job.name} - ${job.id}`);
-          const result = await handler(job.data);
+
+          const logData = (obj: any) =>
+            JSON.stringify(obj, (key, value) => {
+              if (typeof value === "string" && value.length > 500) {
+                return value.substring(0, 500) + "... (truncated)";
+              }
+              return value;
+            });
+
+          await job.log(
+            `Job started: ${job.name} with data: ${logData(job.data)}`,
+          );
+
+          const result = await handler(job.data, job);
+
+          await job.log(`Job finished successfully: ${logData(result)}`);
+
           return { jobId: job.id, result };
         } catch (error) {
           if (error instanceof RateLimitError) {
