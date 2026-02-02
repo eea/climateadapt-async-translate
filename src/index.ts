@@ -68,12 +68,11 @@ function setupBullMQProcessor(queueName: string) {
           } else {
             console.log(`Error in job`, error);
             const errorLog =
-              error instanceof Error
-                ? {
-                  ...error,
-                  message: error.message,
-                  stack: error.stack,
-                }
+              error instanceof Error || (error && typeof error === "object")
+                ? Object.getOwnPropertyNames(error).reduce((acc, key) => {
+                  acc[key] = (error as any)[key];
+                  return acc;
+                }, {} as any)
                 : error;
             await job.log(`Error in job ${JSON.stringify(errorLog)}`);
             throw error;

@@ -24,6 +24,23 @@ function dataToForm(data: Mapping) {
   return form;
 }
 
+async function processResponse(response: any) {
+  const contentType = response.headers.get("Content-Type");
+  const text = await response.text();
+
+  if (contentType === "application/json") {
+    try {
+      return JSON.parse(text);
+    } catch (error: any) {
+      error.reason = "Error converting response to json";
+      error.responseText = text.substring(0, 1000);
+      return { error_type: error };
+    }
+  }
+
+  return { error_type: text, reason: "Unknown failure" };
+}
+
 export async function mockTranslationCallback(obj_path: string) {
   const form = dataToForm({ ...mockData, "external-reference": obj_path });
   const response = await fetch(`${PORTAL_URL}/@@translate-callback`, {
@@ -57,22 +74,7 @@ async function call_etranslation(data: CallETranslation) {
     },
   });
 
-  const contentType = response.headers.get("Content-Type");
-  console.log("Content-Type", contentType);
-
-  let result: any;
-  if (contentType === "application/json") {
-    try {
-      result = await response.json();
-    } catch (error) {
-      result = {
-        error_type: error,
-        reason: "Error converting response to json",
-      };
-    }
-  } else {
-    result = { error_type: await response.text(), reason: "Unknown failure" };
-  }
+  const result = await processResponse(response);
 
   console.log("Call ETranslation Result", result);
 
@@ -114,22 +116,7 @@ async function save_translated_html(data: SaveTranslation) {
     },
   });
 
-  const contentType = response.headers.get("Content-Type");
-  console.log("Content-Type", contentType);
-
-  let result: any;
-  if (contentType === "application/json") {
-    try {
-      result = await response.json();
-    } catch (error) {
-      result = {
-        error_type: error,
-        reason: "Error converting response to json",
-      };
-    }
-  } else {
-    result = { error_type: await response.text(), reason: "Unknown failure" };
-  }
+  const result = await processResponse(response);
 
   console.log("Save translation result", result);
 
@@ -148,18 +135,8 @@ async function sync_translated_paths(data: MoveInfo) {
       Authentication: TRANSLATION_AUTH_TOKEN,
     },
   });
-  const contentType = response.headers.get("Content-Type");
 
-  let result: any;
-  if (contentType === "application/json") {
-    try {
-      result = await response.json();
-    } catch (error) {
-      result = { error_type: error };
-    }
-  } else {
-    result = { error_type: await response.text() };
-  }
+  const result = await processResponse(response);
 
   console.log("Sync translation result", result);
 
@@ -180,18 +157,7 @@ async function delete_translation(data: DeleteTranslation) {
     },
   });
 
-  const contentType = response.headers.get("Content-Type");
-
-  let result: any;
-  if (contentType === "application/json") {
-    try {
-      result = await response.json();
-    } catch (error) {
-      result = { error_type: error };
-    }
-  } else {
-    result = { error_type: await response.text() };
-  }
+  const result = await processResponse(response);
 
   console.log("Delete translation result", result);
 
