@@ -175,3 +175,29 @@ The service provides two interfaces for monitoring:
   clock so lease expiry is deterministic. No network and no real Redis needed.
 - **Smoke test**: run a throwaway Redis, start the service against it, queue
   jobs with a small bullmq script, then read `GET /stats`.
+
+## Automated GitHub Interactions
+
+When using the `gh` (GitHub CLI) utility for automated workflows (e.g., creating PRs from scripts or agents), follow these best practices:
+
+### 1. Initial PR Creation
+Always provide both the title and body during creation to minimize subsequent API calls:
+```bash
+gh pr create --title "Your Title" --body "Your detailed PR description"
+```
+
+### 2. Handling GraphQL Errors
+Some repositories (like `eea.climateadapt.plone`) may have legacy "Projects (classic)" settings that cause `gh pr edit` to fail with GraphQL errors. If this happens, fallback to the GitHub REST API using `gh api`:
+
+**To update a PR title and body:**
+```bash
+gh api -X PATCH /repos/{owner}/{repo}/pulls/{pr_number} \
+  -f title="New Title" \
+  -f body="New Body Content"
+```
+
+### 3. Verification
+To verify the content of a PR programmatically (e.g., ensuring the body was written):
+```bash
+gh pr view {pr_number} --json title,body
+```
