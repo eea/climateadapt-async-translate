@@ -28,7 +28,7 @@ async function processResponse(response: any) {
   const contentType = response.headers.get("Content-Type");
   const text = await response.text();
 
-  if (contentType === "application/json") {
+  if (contentType?.includes("application/json")) {
     try {
       return JSON.parse(text);
     } catch (error: any) {
@@ -82,9 +82,22 @@ async function call_etranslation(data: CallETranslation, job?: Job) {
     throw result.error_type;
   }
 
+  if (result.errorCode || result.errorMessage) {
+    throw new Error(
+      `eTranslation failed: errorCode=${result.errorCode || "missing"} ` +
+        `errorMessage=${result.errorMessage || "missing"}`,
+    );
+  }
+
   if (result.transId < 0) {
     throw new RateLimitError("eTranslation not queued");
   }
+
+  const doneMsg =
+    `eTranslation queued requestId=${result.requestId || result.transId || "missing"} ` +
+    `externalRefId=${result.externalRefId || obj_path}`;
+  console.log(doneMsg);
+  if (job) await job.log(doneMsg);
 
   return result;
 }
