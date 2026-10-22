@@ -8,7 +8,8 @@
     "start": "nodemon --exec ts-node src/index.ts",
     "lint": "eslint 'src/**/*.ts'",
     "format": "prettier --write 'src/**/*.ts'",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "author": "",
   "license": "ISC",
@@ -23,7 +24,8 @@
     "prettier": "^3.5.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.25.0"
+    "typescript-eslint": "^8.25.0",
+    "vitest": "^2.1.9"
   },
   "dependencies": {
     "@bull-board/api": "^6.9.6",

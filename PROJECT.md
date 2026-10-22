@@ -51,6 +51,14 @@ The service handles three main types of jobs, defined in `src/jobs.ts`:
 - **Action**: Calls Plone's `@@delete-translation` view.
 - **Goal**: Safely removes all linked translation objects by UID.
 
+### 5. `submit_group`
+- **Triggered by**: this service, when `ETL_GROUPING_ENABLED=true`.
+- **Action**: Submits one bundled eTranslation request for every language that
+  was collected for an object during the grouping window.
+- **Goal**: Turn 26 per-language submissions into one, and keep the number of
+  concurrent in-flight submissions under eTranslation's quota. See
+  [Quota-aware submissions](#quota-aware-submissions).
+
 ## Queues
 
 The service monitors the following queues by default (configurable via `BULL_QUEUE_NAMES_CSV`):
@@ -59,6 +67,53 @@ The service monitors the following queues by default (configurable via `BULL_QUE
 - **`save_etranslation`**: Used for `save_translated_html` jobs.
 - **`sync_paths`**: Used for `sync_translated_paths` jobs.
 - **`delete_translation`**: Used for `delete_translation` jobs.
+- **`etranslation_submit`**: Used for `submit_group` jobs (grouping mode only).
+
+## Quota-aware submissions
+
+eTranslation enforces a **concurrency quota of 50 active submissions per client**
+and answers anything above it with HTTP 400 / `errorCode=-11200 QUOTA_EXCEEDED`,
+[continuing to reject](https://language-tools.ec.europa.eu/dev-corner/etranslation/rest-v2/rate-limits)
+until the number of in-flight submissions falls back below the quota. "Active"
+means submitted-but-not-yet-delivered, so a worker that submits faster than the
+service delivers blows the budget in seconds. See
+[`../../artifacts/ETRANSLATION-QUOTA-ANALYSIS.md`](../../artifacts/ETRANSLATION-QUOTA-ANALYSIS.md)
+for the production evidence.
+
+Three mechanisms address it, all off by default:
+
+| Mechanism | Where | Effect |
+|---|---|---|
+| **Grouping** | `call_etranslation` collector + `submit_group` | Plone queues one job per language; the collector folds them into one group and issues a single request with a `targetLanguages` array. A multi-language request counts as **one** active submission, so this is a 26x reduction. |
+| **In-flight gate** | `QuotaStore` (`cca:inflight:idx`) | A zset of submission leases. A slot is taken on submit, released when the last language is delivered, and always reclaimed when the lease expires - eTranslation can drop a language without reporting a failure. A `-11200` opens a circuit breaker and requeues instead of failing the job. |
+| **Skip-unchanged cache** | `QuotaStore` (`cca:done:<sha>`) | Languages already translated for byte-identical source HTML are not re-submitted. |
+
+The `externalReference` sent to eTranslation is a short correlation id
+(`cca-<10 hex chars>`, 14 characters) rather than the full object path, which
+reached 210 characters on deep paths and was rejected with
+`errorCode=-10003 CALLER_INFORMATION_EXTERNAL_REFERENCE_TOO_LONG` (schema limit
+200). The correlation record maps the id back to path / serial_id / obj_uid.
+
+### Deployment precondition
+
+**`ETL_GROUPING_ENABLED` must stay `false` until the matching Plone change is
+live.** A bundled request has one `externalReference` shared by every
+per-language delivery, so the language can only come from the callback payload.
+The required Plone changes are:
+
+1. `@@call-etranslation` accepts a comma separated `target_lang` and an optional
+   `ext_ref`.
+2. `@@translate-callback` forwards `targetLanguage` as `language` in the queued
+   `save_translated_html` payload.
+
+If a bundled delivery arrives without a language the save handler throws rather
+than guessing - guessing would write one language's text into another. A
+legacy-shaped reference that carries no `language` is refused for the same
+reason.
+
+State lives in Redis under `cca:*` and every key carries a TTL. Inspect it with
+`redis-cli KEYS 'cca:*'`, or read `GET /stats` for `inFlight`, `breakerOpen` and
+counters.
 
 ## Monitoring and UI
 
@@ -75,9 +130,17 @@ The service provides two interfaces for monitoring:
 - `TRANSLATION_AUTH_TOKEN`: Shared secret for authenticating with Plone.
 - `ENABLED_JOBS`: Comma-separated list of jobs this worker should process.
 - `BULL_QUEUE_NAMES_CSV`: Comma-separated list of queues to monitor.
+- `ETL_*`: Quota-aware submission tuning. See `env.example` for every knob and
+  its default; the important ones are `ETL_GROUPING_ENABLED`, `ETL_MAX_INFLIGHT`
+  and `ETL_LEASE_MS`.
 
 ## Development
 
 - **Build**: `npm run build` (uses `tsc`)
 - **Start**: `npm start` (uses `nodemon` and `ts-node`)
 - **Lint**: `npm run lint`
+- **Test**: `npm test` (vitest). Tests drive `QuotaStore` and the job handlers
+  against `test/fake-redis.ts`, an in-memory Redis double with an injectable
+  clock so lease expiry is deterministic. No network and no real Redis needed.
+- **Smoke test**: run a throwaway Redis, start the service against it, queue
+  jobs with a small bullmq script, then read `GET /stats`.

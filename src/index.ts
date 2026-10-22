@@ -7,10 +7,8 @@ import { fastifyQueueDashPlugin } from "@queuedash/api";
 
 import fastify from "fastify";
 import IORedis from "ioredis";
-
-const DEFAULT_ENABLED_JOBS =
-  "call_etranslation,save_translated_html,sync_translated_paths,delete_translation";
-const DEFAULT_QUEUES = "etranslation,save_etranslation,sync_paths,delete_translation";
+import { config, DEFAULT_ENABLED_JOBS, DEFAULT_QUEUES } from "./config";
+import { initDeps } from "./deps";
 
 const port = parseInt(process.env.PORT || "3000");
 const enabledJobs = (process.env.ENABLED_JOBS || DEFAULT_ENABLED_JOBS).split(
@@ -18,10 +16,13 @@ const enabledJobs = (process.env.ENABLED_JOBS || DEFAULT_ENABLED_JOBS).split(
 );
 const enabledQueues = readQueuesFromEnv();
 
+const REDIS_HOST = process.env.REDIS_HOST || "0.0.0.0";
+const REDIS_PORT = parseInt(process.env.REDIS_PORT || "6379");
+
 const connection = new IORedis({
   maxRetriesPerRequest: null,
-  port: parseInt(process.env.REDIS_PORT || "6379"),
-  host: process.env.REDIS_HOST || "0.0.0.0",
+  port: REDIS_PORT,
+  host: REDIS_HOST,
 });
 
 const createQueueMQ = (name: string) =>
@@ -42,7 +43,7 @@ const createQueueMQ = (name: string) =>
 // Error in job {"url": "https://climate-adapt.eea.europa.eu/ga/observatory"}
 
 function setupBullMQProcessor(queueName: string) {
-  const worker = new Worker(
+  new Worker(
     queueName,
     async (job) => {
       if (enabledJobs.indexOf(job.name) === -1) {
@@ -101,7 +102,9 @@ function setupBullMQProcessor(queueName: string) {
     {
       connection,
       removeOnComplete: { count: 100000 },
-      removeOnFail: { count: 500000 },
+      // A large failed set hides the real problem and costs Redis memory: a
+      // single quota incident left 2229 failed jobs here.
+      removeOnFail: { count: 10000 },
       concurrency: 1,
       settings: {
         backoffStrategy: function (attemptsMade, type_, err, job) {
@@ -126,6 +129,21 @@ function readQueuesFromEnv() {
 }
 
 const run = async () => {
+  const store = initDeps({
+    host: REDIS_HOST,
+    port: REDIS_PORT,
+    bullConnection: connection,
+  });
+
+  if (config.groupingEnabled && !enabledQueues.includes(config.submitQueue)) {
+    console.error(
+      `ETL_GROUPING_ENABLED is on but ${config.submitQueue} is not in ` +
+      `BULL_QUEUE_NAMES_CSV - collected translations would never be submitted. ` +
+      `Disabling grouping for this run.`,
+    );
+    config.groupingEnabled = false;
+  }
+
   const queues = enabledQueues.map((q) => createQueueMQ(q));
 
   queues.forEach((q) => {
@@ -180,6 +198,26 @@ const run = async () => {
     reply.send({ status: connection.status });
   });
 
+  app.get("/stats", async (req, reply) => {
+    try {
+      const [inFlight, counters, breakerOpen] = await Promise.all([
+        store.inFlightCount(),
+        store.stats(),
+        store.breakerOpen(),
+      ]);
+      reply.send({
+        groupingEnabled: config.groupingEnabled,
+        inFlight,
+        maxInFlight: config.maxInFlight,
+        leaseMs: config.leaseMs,
+        breakerOpen,
+        counters,
+      });
+    } catch (error: any) {
+      reply.code(500).send({ error: String(error?.message || error) });
+    }
+  });
+
   await app.listen({ host: "0.0.0.0", port });
 
   console.log(`For the UI, open http://localhost:${port}/ui`);
@@ -188,6 +226,19 @@ const run = async () => {
   );
   console.log(`Enabled jobs: ${enabledJobs}`);
   console.log(`Enabled queues: ${enabledQueues}`);
+  console.log(
+    `Grouping: ${config.groupingEnabled ? "on" : "off"} ` +
+    `(window ${config.groupWindowMs}ms, max in flight ${config.maxInFlight}, ` +
+    `lease ${config.leaseMs}ms, skip cache ${config.skipCache ? "on" : "off"})`,
+  );
+  if (!config.groupingEnabled) {
+    console.log(
+      "Grouping is off: one eTranslation submission per (object, language). " +
+      "Requires the Plone change that accepts a comma separated target_lang and " +
+      "ext_ref on @@call-etranslation and forwards targetLanguage from " +
+      "@@translate-callback.",
+    );
+  }
 };
 
 run().catch((e) => {
