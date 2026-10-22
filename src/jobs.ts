@@ -68,6 +68,19 @@ function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+/**
+ * Plone short-circuits the eTranslation call for localhost portals and for
+ * empty HTML, answering `transId: "not-called"`. That is not a negative number,
+ * so the `transId < 0` check lets it through as a success. For a bundled
+ * submission that is actively wrong: it would save a correlation, take an
+ * in-flight slot, and hold it for the whole lease on work the service never
+ * started - filling the gate with phantom submissions, which is the exact
+ * stall this change exists to prevent.
+ */
+function wasSubmitted(result: any): boolean {
+  return result?.transId !== "not-called";
+}
+
 function isQuotaExceeded(error: unknown): boolean {
   if (error instanceof Error) return error.message.includes(QUOTA_EXCEEDED);
   return JSON.stringify(error ?? "").includes(QUOTA_EXCEEDED);
@@ -318,6 +331,16 @@ async function submit_group(data: SubmitGroup, job?: Job) {
       return requeueSubmit(payload, "not_queued", 5000);
     }
     throw error;
+  }
+
+  if (!wasSubmitted(result)) {
+    await store.stat("skipped_by_portal");
+    const skipMsg =
+      `Plone did not call eTranslation for ${payload.obj_url}: ` +
+      `${result.reason || "no reason given"}`;
+    console.warn(skipMsg);
+    if (job) await job.log(skipMsg);
+    return { status: "skipped", reason: result.reason || "portal did not call" };
   }
 
   const requestId = String(result?.requestId ?? result?.transId ?? "");

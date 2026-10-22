@@ -186,6 +186,20 @@ describe("submit_group", () => {
     expect(await store.inFlightCount()).toBe(0);
   });
 
+  it("does not take a slot when Plone declines to call eTranslation", async () => {
+    // transId="not-called" is a string, so `transId < 0` misses it. Treating it
+    // as a success would park a phantom submission in the gate for the whole
+    // lease and stall the pipeline.
+    await seedGroup();
+    responses.push({ transId: "not-called", reason: "localhost" });
+
+    const result = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
+
+    expect(result).toMatchObject({ status: "skipped", reason: "localhost" });
+    expect(await store.inFlightCount()).toBe(0);
+    expect(queueAdds).toHaveLength(0);
+  });
+
   it("requeues when eTranslation declines to queue the request", async () => {
     // transId < 0 is the existing "not queued" signal. It must not hard-fail:
     // the group is already consumed, so only a payload-carrying requeue saves
