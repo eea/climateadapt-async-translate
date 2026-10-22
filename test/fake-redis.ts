@@ -150,6 +150,14 @@ export class FakeRedis implements RedisLike {
     return this.entryFor(key) ? 1 : 0;
   }
 
+  async rename(key: string, target: string): Promise<string> {
+    const entry = this.entryFor(key);
+    if (!entry) throw new Error(`ERR no such key: ${key}`);
+    this.store.delete(key);
+    this.store.set(target, entry);
+    return "OK";
+  }
+
   async del(...keys: string[]): Promise<number> {
     let removed = 0;
     for (const key of keys) {

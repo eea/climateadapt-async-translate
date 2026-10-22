@@ -69,6 +69,15 @@ export const config = {
   /** Jobs older than this are dropped instead of submitted. */
   staleJobMaxAgeMs: intEnv("ETL_STALE_JOB_MAX_AGE_MS", 7 * 86_400),
 
+  /**
+   * How many times a submission may be retried after an unexpected failure
+   * (Plone 500, network blip) before the job is allowed to fail. The group has
+   * already been consumed by then, so retrying is the only way to keep the
+   * translations - but a genuinely bad request must not loop for a week.
+   */
+  submitMaxAttempts: intEnv("ETL_SUBMIT_MAX_ATTEMPTS", 5),
+  errorBackoffMs: intEnv("ETL_ERROR_BACKOFF_MS", 30_000),
+
   /** Queue used for the bundled submission stage. */
   submitQueue: process.env.ETL_SUBMIT_QUEUE || "etranslation_submit",
 };

@@ -59,13 +59,27 @@ async function processResponse(response: any) {
 }
 
 function newToken(): string {
-  // Exactly 10 chars of [a-z0-9]; keeps externalReference at a fixed 14 chars
-  // and inside TOKEN_RE below.
-  return randomBytes(8).toString("hex").slice(0, 10);
+  // 16 hex chars = 64 bits, keeping externalReference at a fixed 20 chars and
+  // inside TOKEN_RE. The width is not cosmetic: a collision overwrites a
+  // correlation record and saves one object's translation onto another.
+  return randomBytes(8).toString("hex");
 }
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+/**
+ * Cache key for "this object, with this source text".
+ *
+ * The hash must be scoped to the object, not to the HTML alone. Different pages
+ * routinely convert to byte-identical HTML - empty pages, shared block
+ * boilerplate - and an HTML-only key reports a language as already translated
+ * for a page that was never translated at all. That failure is silent: the
+ * submission is skipped and the object simply never gets the language.
+ */
+export function contentSha(obj_uid: string, obj_url: string, html: string): string {
+  return sha256(`${obj_uid || obj_url}\u0000${html}`);
 }
 
 /**
@@ -176,6 +190,22 @@ function toSiteRelativePath(objPath: string): string {
 async function collect_etranslation(data: CallETranslation, job?: Job) {
   const store = getStore();
 
+  // Jobs can sit in Redis for a very long time: pausing the etranslation queue
+  // in production parked 37k of them for two months. Their HTML is an old
+  // revision, so submitting it burns quota on work Plone's serial_id guard will
+  // reject anyway. The submit stage has its own age check, but by then the
+  // group and its payload have already been built.
+  if (job?.timestamp && Date.now() - job.timestamp > config.staleJobMaxAgeMs) {
+    await store.stat("dropped_stale_collect");
+    const msg =
+      `Dropping translation job for ${data.obj_url} queued ` +
+      `${new Date(job.timestamp).toISOString()} - older than ` +
+      `${Math.round(config.staleJobMaxAgeMs / 86_400_000)} days`;
+    console.warn(msg);
+    if (job) await job.log(msg);
+    return { status: "dropped", reason: "stale job" };
+  }
+
   const count = await store.collectGroup(data.obj_url, {
     obj_uid: data.obj_uid || "",
     serial_id: data.serial_id,
@@ -265,7 +295,11 @@ async function submit_group(data: SubmitGroup, job?: Job) {
     if (!group || group.langs.length === 0) {
       return { status: "empty", reason: "group already consumed" };
     }
-    payload = { ...group, sha: sha256(group.html), queued_at: Date.now() };
+    payload = {
+      ...group,
+      sha: contentSha(group.obj_uid, group.obj_url, group.html),
+      queued_at: Date.now(),
+    };
   }
 
   if (Date.now() - payload.queued_at > config.staleJobMaxAgeMs) {
@@ -330,7 +364,20 @@ async function submit_group(data: SubmitGroup, job?: Job) {
       await store.stat("not_queued");
       return requeueSubmit(payload, "not_queued", 5000);
     }
-    throw error;
+
+    // Anything else - Plone returned a 500, the connection dropped. The group
+    // is already consumed, so letting the job fail and be retried loses every
+    // language in it; the payload has to ride along. Bounded, because a
+    // genuinely malformed request would otherwise requeue until stale.
+    const attempt = (payload.attempt || 0) + 1;
+    if (attempt > config.submitMaxAttempts) {
+      console.error(
+        `Giving up on ${payload.obj_url} after ${attempt - 1} retries: ${error?.message || error}`,
+      );
+      throw error;
+    }
+    await store.stat("requeued_error");
+    return requeueSubmit({ ...payload, attempt }, "error", config.errorBackoffMs);
   }
 
   if (!wasSubmitted(result)) {
@@ -475,7 +522,7 @@ async function save_translated_html(data: SaveTranslation, job?: Job) {
     // Plone accepted it. Releasing keeps the slot from being held until the
     // lease expires.
     if (token) {
-      const remaining = await store.progress(token);
+      const remaining = await store.progress(token, language);
       if (remaining !== null) {
         console.log(
           `event=etl.delivered token=${token} language=${language} remaining=${remaining}`,

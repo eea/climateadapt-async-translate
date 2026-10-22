@@ -38,6 +38,8 @@ export type SubmitGroup = {
     langs: string[];
     sha: string;
     queued_at: number;
+    /** Retries after an unexpected failure; see ETL_SUBMIT_MAX_ATTEMPTS. */
+    attempt?: number;
   };
 };
 

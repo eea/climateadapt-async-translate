@@ -34,6 +34,37 @@ describe("QuotaStore grouping", () => {
     expect(group?.obj_uid).toBe("uid-1");
   });
 
+  it("does not drop a language that arrives while the group is closing", async () => {
+    // The window used to be deleted after the read, so a job landing between
+    // the read and the delete had its language erased with nothing rescheduled.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+
+    const slow: any = Object.create(redis);
+    slow.hgetall = async (key: string) => {
+      await gate;
+      return redis.hgetall.call(redis, key);
+    };
+    const slowStore = new QuotaStore(slow, config, () => redis.now());
+
+    await slowStore.collectGroup("cca/en/race", { obj_uid: "u", serial_id: 1, html: "<html>body</html>", language: "de" });
+    expect(await slowStore.armWindow("cca/en/race")).toBe(true);
+
+    const closing = slowStore.readAndCloseGroup("cca/en/race");
+    await Promise.resolve();
+
+    // A second edit arrives mid-close
+    await slowStore.collectGroup("cca/en/race", { obj_uid: "u", serial_id: 2, html: "<html>body</html>", language: "fr" });
+    const rearmed = await slowStore.armWindow("cca/en/race");
+
+    release();
+    const group = await closing;
+
+    expect(group!.langs.sort()).toEqual(["de", "fr"]);
+    // and the late job got to arm its own window rather than being ignored
+    expect(rearmed).toBe(true);
+  });
+
   it("keeps the highest serial_id seen, so the freshest content is submitted", async () => {
     await store.collectGroup("p", { obj_uid: "u", serial_id: 3, html: "old", language: "de" });
     await store.collectGroup("p", { obj_uid: "u", serial_id: 9, html: "new", language: "fr" });
@@ -90,17 +121,28 @@ describe("QuotaStore in-flight gate", () => {
 
   it("reclaims a slot when every language of a bundled submission is delivered", async () => {
     await store.reserve("tok", { request_id: "1", remaining: 3, langs: ["a", "b", "c"] });
-    expect(await store.progress("tok")).toBe(2);
-    expect(await store.progress("tok")).toBe(1);
+    expect(await store.progress("tok", "a")).toBe(2);
+    expect(await store.progress("tok", "b")).toBe(1);
     expect(await store.inFlightCount()).toBe(1);
-    expect(await store.progress("tok")).toBe(0);
+    expect(await store.progress("tok", "c")).toBe(0);
+    expect(await store.inFlightCount()).toBe(0);
+  });
+
+  it("does not free a slot early when a delivery is retried", async () => {
+    // eTranslation redelivers when a callback fails. Counting deliveries rather
+    // than distinct languages would release capacity while work is outstanding.
+    await store.reserve("tok", { request_id: "1", remaining: 2, langs: ["de", "fr"] });
+    expect(await store.progress("tok", "de")).toBe(1);
+    expect(await store.progress("tok", "de")).toBe(1); // redelivery, not a new language
+    expect(await store.inFlightCount()).toBe(1);
+    expect(await store.progress("tok", "fr")).toBe(0);
     expect(await store.inFlightCount()).toBe(0);
   });
 
   it("holds a partially delivered slot and then reclaims it when the lease expires", async () => {
     // 26 languages requested, 25 delivered: EN->ET silently never arrives.
-    await store.reserve("tok", { request_id: "1", remaining: 26, langs: LANGS }, 0);
-    for (let i = 0; i < 25; i++) await store.progress("tok");
+    await store.reserve("tok", { request_id: "1", remaining: 26, langs: LANGS });
+    for (let i = 0; i < 25; i++) await store.progress("tok", LANGS[i]);
     expect(await store.inFlightCount()).toBe(1);
 
     redis.advance(config.leaseMs + 1);
@@ -109,9 +151,9 @@ describe("QuotaStore in-flight gate", () => {
 
   it("releases early on a duplicate delivery without going negative", async () => {
     await store.reserve("tok", { request_id: "1", remaining: 1, langs: ["de"] });
-    expect(await store.progress("tok")).toBe(0);
+    expect(await store.progress("tok", "de")).toBe(0);
     // record is gone; a retried delivery must not resurrect or corrupt it
-    expect(await store.progress("tok")).toBeNull();
+    expect(await store.progress("tok", "de")).toBeNull();
     expect(await store.inFlightCount()).toBe(0);
   });
 

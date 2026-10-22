@@ -39,6 +39,7 @@ export interface RedisLike {
   zrem(key: string, member: string): Promise<number>;
   zcard(key: string): Promise<number>;
   zremrangebyscore(key: string, min: number | string, max: number | string): Promise<number>;
+  rename(key: string, target: string): Promise<string>;
 }
 
 export interface GroupRecord {
@@ -141,14 +142,30 @@ export class QuotaStore {
    */
   async readAndCloseGroup(objUrl: string): Promise<GroupRecord | null> {
     const key = grpKey(objUrl);
-    const [group, langs] = await Promise.all([
-      this.r.hgetall(key),
-      this.r.smembers(langsKey(objUrl)),
-    ]);
+    const langsKeyHere = langsKey(objUrl);
 
-    await this.r.del(key, langsKey(objUrl), armedKey(objUrl));
+    // Close the window before reading. A job that arrives during the read then
+    // arms its own submission instead of having its language deleted under it -
+    // with the delete last, a language collected between the read and the
+    // delete vanished and nothing was rescheduled for it.
+    await this.r.del(armedKey(objUrl));
 
-    if (!group || !group.obj_url) return null;
+    const group = await this.r.hgetall(key);
+    if (!group || !group.obj_url) {
+      await this.r.del(key, langsKeyHere);
+      return null;
+    }
+
+    // RENAME is atomic: a language added after this point lands in a fresh set
+    // belonging to the next window, and one added before it is included here.
+    let langs: string[] = [];
+    if (await this.r.exists(langsKeyHere)) {
+      const closing = `${langsKeyHere}:closing`;
+      await this.r.rename(langsKeyHere, closing);
+      langs = await this.r.smembers(closing);
+      await this.r.del(closing);
+    }
+    await this.r.del(key);
 
     return {
       obj_url: group.obj_url,
@@ -187,7 +204,7 @@ export class QuotaStore {
   /** Free a slot early. */
   async release(token: string): Promise<void> {
     await this.r.zrem(INDEX_KEY, token);
-    await this.r.del(inflightKey(token));
+    await this.r.del(inflightKey(token), `${inflightKey(token)}:seen`);
   }
 
   /**
@@ -195,11 +212,22 @@ export class QuotaStore {
    * outstanding, or null when the record was already gone (expired lease or a
    * duplicate delivery).
    */
-  async progress(token: string): Promise<number | null> {
+  async progress(token: string, language: string): Promise<number | null> {
     const key = inflightKey(token);
     // HINCRBY would happily create the key at -1, so a retried delivery of an
     // already-finished submission would leave a stray record behind.
     if (!(await this.r.exists(key))) return null;
+
+    // Count distinct languages, not deliveries. eTranslation redelivers when a
+    // callback fails, and decrementing per delivery frees the slot while other
+    // languages of the same submission are still outstanding - which is how a
+    // gate ends up over quota.
+    const seenKey = `${key}:seen`;
+    if ((await this.r.sadd(seenKey, language)) === 0) {
+      const remaining = await this.r.hget(key, "remaining");
+      return remaining === null ? null : Number(remaining);
+    }
+    await this.r.expire(seenKey, Math.ceil(this.cfg.leaseMs / 1000));
 
     const remaining = await this.r.hincrby(key, "remaining", -1);
     if (!Number.isFinite(remaining)) return null;

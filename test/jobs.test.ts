@@ -1,7 +1,6 @@
 import { describe, expect, beforeEach, it, vi } from "vitest";
-import { createHash } from "node:crypto";
 import { Queue } from "bullmq";
-import { JOBS_MAPPING } from "../src/jobs";
+import { contentSha, JOBS_MAPPING } from "../src/jobs";
 import { QuotaStore } from "../src/store";
 import { config } from "../src/config";
 import { setStore, setSubmitQueue } from "../src/deps";
@@ -13,7 +12,8 @@ const LANGS = [
   "sk", "sl", "sv", "nn", "is", "tr",
 ];
 const HTML = "<html><body><p>climate content</p></body></html>";
-const sha256 = (t: string) => createHash("sha256").update(t).digest("hex");
+// The cache key is scoped to the object, so tests must build it the same way.
+const sha = (objUrl = "cca/en/a-page", html = HTML) => contentSha("uid-1", objUrl, html);
 
 let redis: FakeRedis;
 let store: QuotaStore;
@@ -43,17 +43,19 @@ beforeEach(() => {
   responses = [];
   vi.stubGlobal("fetch", async (url: any, init: any) => {
     fetchCalls.push({ url: String(url), form: init.body });
-    return jsonResponse(responses.shift() ?? { ok: true });
+    const next = responses.shift() ?? { ok: true };
+    if (next instanceof Error) throw next; // simulate a transport failure
+    return jsonResponse(next);
   });
 
   config.groupingEnabled = false;
   config.maxInFlight = 40;
 });
 
-async function seedGroup(objUrl = "cca/en/a-page", langs = LANGS, serialId = 5) {
+async function seedGroup(objUrl = "cca/en/a-page", langs = LANGS, serialId = 5, objUid = "uid-1") {
   for (const language of langs) {
     await store.collectGroup(objUrl, {
-      obj_uid: "uid-1",
+      obj_uid: objUid,
       serial_id: serialId,
       html: HTML,
       language,
@@ -114,6 +116,31 @@ describe("call_etranslation as collector (grouping on)", () => {
     expect(fetchCalls).toHaveLength(0);
   });
 
+  it("drops a collect job that has been sitting in Redis for weeks", async () => {
+    // Pausing the etranslation queue parked 37k jobs for two months in
+    // production. Their HTML is an old revision: collecting it builds a group
+    // and spends quota on a submission Plone rejects on serial_id anyway.
+    const stale = Date.now() - config.staleJobMaxAgeMs - 60_000;
+    const result = await JOBS_MAPPING.call_etranslation(
+      { obj_url: "cca/en/a-page", obj_uid: "u", html: HTML, serial_id: 1, language: "de" },
+      { timestamp: stale, log: async () => {} } as any,
+    );
+
+    expect(result).toMatchObject({ status: "dropped", reason: "stale job" });
+    expect(queueAdds).toHaveLength(0);
+    expect(await store.inFlightCount()).toBe(0);
+  });
+
+  it("still collects a job that is merely old-ish", async () => {
+    const recent = Date.now() - config.staleJobMaxAgeMs + 60_000;
+    const result = await JOBS_MAPPING.call_etranslation(
+      { obj_url: "cca/en/a-page", obj_uid: "u", html: HTML, serial_id: 1, language: "de" },
+      { timestamp: recent, log: async () => {} } as any,
+    );
+    expect(result).toMatchObject({ status: "collected" });
+    expect(queueAdds).toHaveLength(1);
+  });
+
   it("schedules exactly one bundled submission for 26 per-language jobs", async () => {
     for (const language of LANGS) {
       await JOBS_MAPPING.call_etranslation({
@@ -143,7 +170,7 @@ describe("submit_group", () => {
     const form = fetchCalls[0].form;
     expect(String(form.get("target_lang")).split(",")).toHaveLength(26);
     const extRef = String(form.get("ext_ref"));
-    expect(extRef).toMatch(/^cca-[0-9a-f]{10}$/);
+    expect(extRef).toMatch(/^cca-[0-9a-f]{16}$/);
     expect(extRef.length).toBeLessThanOrEqual(200);
     // obj_path keeps the staleness guard but must not pretend to know a language
     expect(String(form.get("obj_path"))).not.toContain("language=");
@@ -214,15 +241,68 @@ describe("submit_group", () => {
     expect(await store.inFlightCount()).toBe(0);
   });
 
+  it("does not let one object's translations satisfy a different object's", async () => {
+    // Different pages routinely convert to byte-identical HTML. If the cache
+    // key were the HTML alone, the second page would be reported as already
+    // translated and silently never submitted.
+    await seedGroup();
+    responses.push({ requestId: 4242 });
+    const submitted: any = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
+    for (const language of LANGS) {
+      responses.push({ url: "http://portal/x" });
+      await JOBS_MAPPING.save_translated_html({
+        obj_path: `cca-${submitted.token}`, html: "<p>x</p>", language,
+      });
+    }
+
+    await seedGroup("cca/en/an-identical-looking-page", LANGS, 5, "uid-2");
+    responses.push({ requestId: 4243 });
+    const other: any = await JOBS_MAPPING.submit_group({ key: "cca/en/an-identical-looking-page" });
+
+    expect(other.status).toBe("submitted");
+    expect(other.langs).toHaveLength(LANGS.length);
+  });
+
+  it("keeps the translations when the submission call itself fails", async () => {
+    // Plone 500 / dropped connection. The group is already consumed, so the
+    // payload has to ride along with a retry or all 26 languages are lost.
+    await seedGroup();
+    responses.push(new Error("connection reset by peer"));
+
+    const result = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
+
+    expect(result).toMatchObject({ status: "requeued", reason: "error" });
+    expect(queueAdds[0].data.payload.langs).toHaveLength(26);
+    expect(queueAdds[0].data.payload.attempt).toBe(1);
+  });
+
+  it("gives up rather than retrying a bad request forever", async () => {
+    // Retrying is what saves the group, but a genuinely malformed request must
+    // end up in the failed set instead of requeueing until it goes stale.
+    const payload = {
+      obj_url: "cca/en/a-page", obj_uid: "uid-1", serial_id: 5,
+      html: HTML, langs: LANGS, sha: sha(), queued_at: Date.now(),
+      attempt: config.submitMaxAttempts,
+    };
+    responses.push(new Error("connection reset by peer"));
+
+    await expect(
+      JOBS_MAPPING.submit_group({ key: "unused", payload }),
+    ).rejects.toThrow(/connection reset/);
+    expect(queueAdds).toHaveLength(0);
+  });
+
   it("does not mistake another errorCode for a quota rejection", async () => {
     await seedGroup();
     responses.push({ errorCode: "-10003", errorMessage: "EXTERNAL_REFERENCE_TOO_LONG" });
 
-    await expect(JOBS_MAPPING.submit_group({ key: "cca/en/a-page" })).rejects.toThrow(
-      /errorCode=-10003/,
-    );
+    const result = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
+
+    // Retried like any other failure, but the breaker stays shut: this object
+    // has a bad reference, not a quota problem, and must not stall the pipeline.
+    expect(result).toMatchObject({ status: "requeued", reason: "error" });
     expect(await store.breakerOpen()).toBe(false);
-    expect(queueAdds).toHaveLength(0);
+    expect(queueAdds[0].data.payload.attempt).toBe(1);
   });
 
   it("waits for a free slot instead of submitting over the ceiling", async () => {
@@ -238,7 +318,7 @@ describe("submit_group", () => {
 
   it("skips languages already translated for identical source HTML", async () => {
     await seedGroup();
-    for (const lang of LANGS) await store.markTranslated(sha256(HTML), lang);
+    for (const lang of LANGS) await store.markTranslated(sha(), lang);
 
     const result = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
 
@@ -248,7 +328,7 @@ describe("submit_group", () => {
 
   it("submits only the languages that are not cached yet", async () => {
     await seedGroup("cca/en/a-page", LANGS);
-    for (const lang of LANGS.slice(1)) await store.markTranslated(sha256(HTML), lang);
+    for (const lang of LANGS.slice(1)) await store.markTranslated(sha(), lang);
 
     const result = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
     expect(result).toMatchObject({ status: "submitted" });
@@ -267,7 +347,7 @@ describe("submit_group", () => {
       key: "cca/en/a-page",
       payload: {
         obj_url: "cca/en/a-page", obj_uid: "uid-1", serial_id: 5, html: HTML,
-        langs: LANGS, sha: sha256(HTML), queued_at: Date.now() - config.staleJobMaxAgeMs - 1000,
+        langs: LANGS, sha: sha(), queued_at: Date.now() - config.staleJobMaxAgeMs - 1000,
       },
     });
     expect(result).toMatchObject({ status: "dropped", reason: "stale" });
@@ -296,7 +376,7 @@ describe("save_translated_html", () => {
     }
 
     expect(await store.inFlightCount()).toBe(0);
-    expect((await store.translatedLangs(sha256(HTML))).sort()).toEqual([...LANGS].sort());
+    expect((await store.translatedLangs(sha())).sort()).toEqual([...LANGS].sort());
   });
 
   it("holds the slot when a language is silently never delivered", async () => {
@@ -351,7 +431,7 @@ describe("save_translated_html", () => {
     ).rejects.toBe("mismatched serial id");
 
     // the translation was thrown away, so it must be translatable again...
-    expect(await store.translatedLangs(sha256(HTML))).toEqual([]);
+    expect(await store.translatedLangs(sha())).toEqual([]);
     // ...and the delivery was still consumed, so the slot must not be held
     expect(await store.inFlightCount()).toBe(0);
   });

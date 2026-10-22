@@ -101,7 +101,10 @@ function setupBullMQProcessor(queueName: string) {
     },
     {
       connection,
-      removeOnComplete: { count: 100000 },
+      // Completed jobs keep their full payload, which for translation work is a
+      // whole page of HTML. A full sweep is ~137k collect jobs, so 100000
+      // retained records is gigabytes of Redis for entries nobody reads.
+      removeOnComplete: { count: 1000 },
       // A large failed set hides the real problem and costs Redis memory: a
       // single quota incident left 2229 failed jobs here.
       removeOnFail: { count: 10000 },
@@ -139,6 +142,22 @@ const run = async () => {
     console.error(
       `ETL_GROUPING_ENABLED is on but ${config.submitQueue} is not in ` +
       `BULL_QUEUE_NAMES_CSV - collected translations would never be submitted. ` +
+      `Disabling grouping for this run.`,
+    );
+    config.groupingEnabled = false;
+  }
+
+  // The queue can be monitored while the job is filtered out by ENABLED_JOBS.
+  // That path throws Worker.RateLimitError, which puts the job back for an
+  // immediate retry - a busy loop against every submission we make.
+  if (
+    config.groupingEnabled &&
+    enabledQueues.includes(config.submitQueue) &&
+    !enabledJobs.includes("submit_group")
+  ) {
+    console.error(
+      `${config.submitQueue} is monitored but submit_group is not in ` +
+      `ENABLED_JOBS - submit jobs would be rejected and retried in a loop. ` +
       `Disabling grouping for this run.`,
     );
     config.groupingEnabled = false;
