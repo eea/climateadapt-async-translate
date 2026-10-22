@@ -84,9 +84,9 @@ export async function mockTranslationCallback(obj_path: string) {
 }
 
 /**
- * Ask Plone to submit a translation. Returns the parsed response instead of
- * throwing, so callers can tell a quota rejection (retry later) from a genuine
- * bad request (fail the job).
+ * Ask Plone to submit a translation, in the same style as `call_etranslation`:
+ * throw on any failure. `submit_group` catches and classifies, because a quota
+ * rejection has to be retried later rather than failed.
  */
 async function postCallETranslation(args: {
   html: string;
@@ -94,7 +94,7 @@ async function postCallETranslation(args: {
   objPath: string;
   objUid: string;
   extRef?: string;
-}): Promise<{ ok: boolean; result?: any; error?: any }> {
+}): Promise<any> {
   const { html, targetLang, objPath, objUid, extRef } = args;
 
   const form = dataToForm({
@@ -116,25 +116,21 @@ async function postCallETranslation(args: {
   const result = await processResponse(response);
 
   if (result.error_type) {
-    return { ok: false, error: result.error_type };
+    throw result.error_type;
   }
+
   if (result.errorCode || result.errorMessage) {
-    // Returned, not thrown: submit_group has to tell a quota rejection
-    // (-11200) from any other failure and back off instead of burning retries.
-    // The legacy path still raises it, via `if (!ok) throw error`.
-    return {
-      ok: false,
-      error: new Error(
-        `eTranslation failed: errorCode=${result.errorCode || "missing"} ` +
-          `errorMessage=${result.errorMessage || "missing"}`,
-      ),
-    };
+    throw new Error(
+      `eTranslation failed: errorCode=${result.errorCode || "missing"} ` +
+        `errorMessage=${result.errorMessage || "missing"}`,
+    );
   }
 
   if (result.transId < 0) {
-    return { ok: false, error: new RateLimitError("eTranslation not queued") };
+    throw new RateLimitError("eTranslation not queued");
   }
-  return { ok: true, result };
+
+  return result;
 }
 
 /** The legacy obj_path shape: carries everything the save step needs. */
@@ -210,16 +206,12 @@ async function call_etranslation(data: CallETranslation, job?: Job) {
   console.log(startMsg);
   if (job) await job.log(startMsg);
 
-  const { ok, result, error } = await postCallETranslation({
+  const result = await postCallETranslation({
     html: data.html,
     targetLang: data.language,
     objPath: obj_path,
     objUid: data.obj_uid || "",
   });
-
-  if (!ok) {
-    throw error;
-  }
 
   const doneMsg =
     `eTranslation queued requestId=${result.requestId || result.transId || "missing"} ` +
@@ -301,15 +293,18 @@ async function submit_group(data: SubmitGroup, job?: Job) {
   console.log(startMsg);
   if (job) await job.log(startMsg);
 
-  const { ok, result, error } = await postCallETranslation({
-    html: payload.html,
-    targetLang: langs.join(","),
-    objPath,
-    objUid: payload.obj_uid,
-    extRef,
-  });
-
-  if (!ok) {
+  let result: any;
+  try {
+    result = await postCallETranslation({
+      html: payload.html,
+      targetLang: langs.join(","),
+      objPath,
+      objUid: payload.obj_uid,
+      extRef,
+    });
+  } catch (error: any) {
+    // The group was already consumed, so the payload only survives by riding
+    // with the requeued job. Anything unexpected still fails the job.
     if (isQuotaExceeded(error)) {
       await store.openBreaker();
       await store.stat("quota_exceeded");
@@ -317,6 +312,10 @@ async function submit_group(data: SubmitGroup, job?: Job) {
         `event=etl.quota_backoff obj_url=${payload.obj_url} in_flight=${inFlight} limit=${config.maxInFlight}`,
       );
       return requeueSubmit(payload, "quota_exceeded", config.breakerMs);
+    }
+    if (error instanceof RateLimitError) {
+      await store.stat("not_queued");
+      return requeueSubmit(payload, "not_queued", 5000);
     }
     throw error;
   }
@@ -342,7 +341,10 @@ async function submit_group(data: SubmitGroup, job?: Job) {
   await store.stat("submissions");
   await store.stat("submitted_languages", langs.length);
 
-  const doneMsg = `event=etl.submit token=${token} request_id=${requestId} langs=${langs.length} in_flight=${inFlight + 1}`;
+  const doneMsg =
+    `eTranslation queued requestId=${requestId || "missing"} ` +
+    `externalRefId=${result.externalRefId || extRef} ` +
+    `langs=${langs.length} in_flight=${inFlight + 1}`;
   console.log(doneMsg);
   if (job) await job.log(doneMsg);
 

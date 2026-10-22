@@ -186,6 +186,20 @@ describe("submit_group", () => {
     expect(await store.inFlightCount()).toBe(0);
   });
 
+  it("requeues when eTranslation declines to queue the request", async () => {
+    // transId < 0 is the existing "not queued" signal. It must not hard-fail:
+    // the group is already consumed, so only a payload-carrying requeue saves
+    // the translations.
+    await seedGroup();
+    responses.push({ transId: -1 });
+
+    const result = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
+
+    expect(result).toMatchObject({ status: "requeued", reason: "not_queued" });
+    expect(queueAdds[0].data.payload.langs).toHaveLength(26);
+    expect(await store.inFlightCount()).toBe(0);
+  });
+
   it("does not mistake another errorCode for a quota rejection", async () => {
     await seedGroup();
     responses.push({ errorCode: "-10003", errorMessage: "EXTERNAL_REFERENCE_TOO_LONG" });
