@@ -54,3 +54,16 @@ export type MoveInfo = {
 export type DeleteTranslation = {
   uids: string[];
 };
+
+/**
+ * eTranslation's failure notification, forwarded by @@translate-failure.
+ * Only sent because the submission asks for notifications.failure.http.
+ */
+export type TranslationFailure = {
+  /** The submission's externalReference, e.g. "cca-<token>". */
+  obj_path: string;
+  request_id?: number;
+  languages: string[];
+  error_code?: number | string;
+  error_message?: string;
+};

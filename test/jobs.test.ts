@@ -458,3 +458,71 @@ describe("save_translated_html", () => {
     ).rejects.toThrow(/carries no language/);
   });
 });
+
+describe("translation_failed (eTranslation failure notification)", () => {
+  beforeEach(() => {
+    config.groupingEnabled = true;
+  });
+
+  async function submitAndGetToken(): Promise<string> {
+    await seedGroup();
+    responses.push({ requestId: 4242, transId: 4242 });
+    const r: any = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
+    return r.token;
+  }
+
+  it("frees the slot when the outstanding languages are reported failed", async () => {
+    // 25 delivered, one failing upstream. Before failure notifications that
+    // slot sat for the whole lease with nothing to explain it.
+    const token = await submitAndGetToken();
+    for (const language of LANGS.slice(1)) {
+      responses.push({ url: "http://portal/x" });
+      await JOBS_MAPPING.save_translated_html({
+        obj_path: `cca-${token}`, html: "<p>x</p>", language,
+      });
+    }
+    expect(await store.inFlightCount()).toBe(1);
+
+    const result = await JOBS_MAPPING.translation_failed({
+      obj_path: `cca-${token}`,
+      request_id: 4242,
+      languages: [LANGS[0].toUpperCase()],
+      error_code: -30000,
+      error_message: "Cannot convert input file",
+    });
+
+    expect(result).toMatchObject({ status: "recorded", langs: [LANGS[0]], remaining: 0 });
+    expect(await store.inFlightCount()).toBe(0);
+  });
+
+  it("counts distinct languages, so a redelivered notification cannot over-release", async () => {
+    const token = await submitAndGetToken();
+    await JOBS_MAPPING.translation_failed({ obj_path: `cca-${token}`, languages: ["de", "fr"] });
+    await JOBS_MAPPING.translation_failed({ obj_path: `cca-${token}`, languages: ["de", "fr"] });
+    expect(await store.inFlightCount()).toBe(1); // 24 still outstanding
+  });
+
+  it("leaves the slot to the lease when the notification names no language", async () => {
+    const token = await submitAndGetToken();
+    const result = await JOBS_MAPPING.translation_failed({
+      obj_path: `cca-${token}`, languages: [],
+    });
+    expect(result).toMatchObject({ status: "recorded", unattributed: true });
+    expect(await store.inFlightCount()).toBe(1);
+  });
+
+  it("ignores a notification whose correlation has expired", async () => {
+    const result = await JOBS_MAPPING.translation_failed({
+      obj_path: "cca-0123456789abcdef", languages: ["de"],
+    });
+    expect(result).toMatchObject({ status: "ignored", reason: "unknown token" });
+    expect(await store.inFlightCount()).toBe(0);
+  });
+
+  it("ignores a legacy reference, which has no gate to free", async () => {
+    const result = await JOBS_MAPPING.translation_failed({
+      obj_path: "/en/a-page?serial_id=1&language=de", languages: ["de"],
+    });
+    expect(result).toMatchObject({ status: "ignored", reason: "unrecognised reference" });
+  });
+});

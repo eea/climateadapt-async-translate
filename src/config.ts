@@ -85,6 +85,6 @@ export const config = {
 export type Config = typeof config;
 
 export const DEFAULT_ENABLED_JOBS =
-  "call_etranslation,save_translated_html,sync_translated_paths,delete_translation,submit_group";
+  "call_etranslation,save_translated_html,sync_translated_paths,delete_translation,submit_group,translation_failed";
 export const DEFAULT_QUEUES =
   "etranslation,save_etranslation,sync_paths,delete_translation,etranslation_submit";

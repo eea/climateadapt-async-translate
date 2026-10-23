@@ -3,6 +3,7 @@ import type {
   MoveInfo,
   SaveTranslation,
   SubmitGroup,
+  TranslationFailure,
   TypeJobsMapping,
   DeleteTranslation,
 } from "./types";
@@ -576,10 +577,73 @@ async function delete_translation(data: DeleteTranslation, job?: Job) {
   return result;
 }
 
+/**
+ * eTranslation reports a failed language only because the submission asks for
+ * it through notifications.failure.http. Before that, a language that failed
+ * upstream simply never delivered and nothing here learned why - the only
+ * symptom was a submission slot held until its lease expired.
+ *
+ * A failed language is finished with, exactly like a delivered one, so it goes
+ * through the same progress() accounting: distinct languages only, slot freed
+ * when the last one resolves.
+ */
+async function translation_failed(data: TranslationFailure, job?: Job) {
+  const store = getStore();
+
+  const bundled = TOKEN_RE.exec(data.obj_path || "");
+  if (!bundled) {
+    // A legacy submission has no correlation record and no gate to free.
+    console.warn(
+      `Ignoring failure notification for unrecognised reference ${data.obj_path}`,
+    );
+    return { status: "ignored", reason: "unrecognised reference" };
+  }
+
+  const token = bundled[1];
+  const corr = await store.getCorrelation(token);
+  if (!corr) {
+    // Expected when the correlation has expired; not worth failing a job over.
+    await store.stat("failure_unknown_token");
+    console.warn(`Failure notification for unknown or expired token ${token}`);
+    return { status: "ignored", reason: "unknown token" };
+  }
+
+  const langs = (data.languages || []).map((l) => String(l).toLowerCase());
+
+  if (langs.length === 0) {
+    // eTranslation named no language, so there is nothing to attribute. Guessing
+    // would corrupt the count of outstanding languages; leave the lease to
+    // reclaim the slot.
+    await store.stat("failure_unattributed");
+    console.warn(
+      `Failure notification for ${token} names no language; leaving the slot to the lease`,
+    );
+    return { status: "recorded", token, langs: [], unattributed: true };
+  }
+
+  let remaining: number | null = null;
+  for (const language of langs) {
+    remaining = await store.progress(token, language);
+  }
+
+  await store.stat("failed_languages", langs.length);
+  await store.stat("failed_requests");
+
+  const msg =
+    `event=etl.failed token=${token} langs=${langs.join(",")} ` +
+    `error_code=${data.error_code ?? "missing"} ` +
+    `error_message=${data.error_message ?? "missing"} remaining=${remaining}`;
+  console.warn(msg);
+  if (job) await job.log(msg);
+
+  return { status: "recorded", token, langs, remaining };
+}
+
 export const JOBS_MAPPING: TypeJobsMapping = {
   call_etranslation,
   submit_group,
   save_translated_html,
+  translation_failed,
   sync_translated_paths,
   delete_translation,
 };

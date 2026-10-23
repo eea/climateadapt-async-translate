@@ -59,6 +59,16 @@ The service handles three main types of jobs, defined in `src/jobs.ts`:
   concurrent in-flight submissions under eTranslation's quota. See
   [Quota-aware submissions](#quota-aware-submissions).
 
+### 6. `translation_failed`
+- **Triggered by**: Plone's `@@translate-failure` view, which receives
+  eTranslation's failure notification.
+- **Action**: Resolves the submission from its `externalReference` and releases
+  the in-flight share of each named language.
+- **Goal**: A language that fails upstream used to be invisible - the delivery
+  simply never arrived and the submission slot was held until the lease expired.
+  This turns that silence into an event. See
+  [`ETRANSLATION-FAILURE-NOTIFICATIONS.md`](../../artifacts/ETRANSLATION-FAILURE-NOTIFICATIONS.md).
+
 ## Queues
 
 The service monitors the following queues by default (configurable via `BULL_QUEUE_NAMES_CSV`):
@@ -114,6 +124,20 @@ reason.
 State lives in Redis under `cca:*` and every key carries a TTL. Inspect it with
 `redis-cli KEYS 'cca:*'`, or read `GET /stats` for `inFlight`, `breakerOpen` and
 counters.
+
+### Failure notifications
+eTranslation only reports a failed language when the request asks for it via
+`notifications.failure.http`. Plone now sets that to `@@translate-failure`, which
+queues a `translation_failed` job. Without it a failing language produces no
+signal at all - which is why EN->ET once vanished from a 26-language submission
+with no error anywhere in the logs.
+
+**Deploy the worker before the Plone change.** Plone is what starts sending the
+notifications; if `translation_failed` is missing from `ENABLED_JOBS` the worker
+rejects the job with `RateLimitError` and retries it immediately - a busy loop.
+With failure notifications confirmed working, `ETL_LEASE_MS` can drop from 15
+minutes to 2-3, because a submission is then resolved by an event rather than by
+a timeout.
 
 ## Monitoring and UI
 
