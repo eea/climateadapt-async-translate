@@ -2,6 +2,11 @@
 
 This microservice is a Node.js-based worker that manages the asynchronous translation workflow for Climate-ADAPT. It uses [BullMQ](https://bullmq.io/) and Redis to handle job queuing and state management.
 
+> For the full pipeline - why it is shaped this way, where the state lives, how
+> to inspect a running deployment, and what is still broken - see
+> **[docs/TRANSLATION-MECHANISM.md](docs/TRANSLATION-MECHANISM.md)**. This file is
+> the service overview; that one is the operational reference.
+
 ## Role in the Ecosystem
 
 The service acts as a middleware/orchestrator between the Plone backend and the external eTranslation service. Its primary purpose is to decouple long-running translation tasks from the main CMS operations, ensuring a responsive user experience.
@@ -67,7 +72,7 @@ The service handles three main types of jobs, defined in `src/jobs.ts`:
 - **Goal**: A language that fails upstream used to be invisible - the delivery
   simply never arrived and the submission slot was held until the lease expired.
   This turns that silence into an event. See
-  [`ETRANSLATION-FAILURE-NOTIFICATIONS.md`](../../artifacts/ETRANSLATION-FAILURE-NOTIFICATIONS.md).
+  [Failure handling](docs/TRANSLATION-MECHANISM.md#6-failure-handling--and-what-is-still-silent).
 
 ## Queues
 
@@ -87,8 +92,8 @@ and answers anything above it with HTTP 400 / `errorCode=-11200 QUOTA_EXCEEDED`,
 until the number of in-flight submissions falls back below the quota. "Active"
 means submitted-but-not-yet-delivered, so a worker that submits faster than the
 service delivers blows the budget in seconds. See
-[`../../artifacts/ETRANSLATION-QUOTA-ANALYSIS.md`](../../artifacts/ETRANSLATION-QUOTA-ANALYSIS.md)
-for the production evidence.
+[The problem this solves](docs/TRANSLATION-MECHANISM.md#1-the-problem-this-solves)
+for the reasoning and the production evidence.
 
 Three mechanisms address it, all off by default:
 
@@ -99,10 +104,12 @@ Three mechanisms address it, all off by default:
 | **Skip-unchanged cache** | `QuotaStore` (`cca:done:<sha>`) | Languages already translated for byte-identical source HTML are not re-submitted. |
 
 The `externalReference` sent to eTranslation is a short correlation id
-(`cca-<10 hex chars>`, 14 characters) rather than the full object path, which
-reached 210 characters on deep paths and was rejected with
+(`cca-<16 hex chars>`, a fixed 20 characters) rather than the full object path,
+which reached 210 characters on deep paths and was rejected with
 `errorCode=-10003 CALLER_INFORMATION_EXTERNAL_REFERENCE_TOO_LONG` (schema limit
 200). The correlation record maps the id back to path / serial_id / obj_uid.
+The language cannot be encoded in the reference: every delivery of a bundled
+request shares one reference, so the language comes from the callback.
 
 ### Deployment precondition
 
