@@ -13,6 +13,7 @@ Image: [`eeacms/climateadapt-async-translate`](https://hub.docker.com/r/eeacms/c
 |---|---|
 | **[docs/TRANSLATION-MECHANISM.md](docs/TRANSLATION-MECHANISM.md)** | The authoritative reference: the full pipeline, the quota mechanisms, Redis key inventory, configuration, throughput limits, known gaps, and **how to probe a live deployment**. Read this first if you are debugging or operating the pipeline. |
 | [PROJECT.md](PROJECT.md) | Service overview: role, tech stack, job types, queues, development workflow. |
+| [docs/RUNNING-UNBUILT-CODE.md](docs/RUNNING-UNBUILT-CODE.md) | How to test changes against real production traffic **without building an image** — what that costs, what is ephemeral, and why it stays out of the Helm chart. |
 
 ## Why the design is unusual
 
