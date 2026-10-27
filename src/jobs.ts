@@ -294,6 +294,9 @@ async function submit_group(data: SubmitGroup, job?: Job) {
   if (!payload) {
     const group = await store.readAndCloseGroup(data.key);
     if (!group || group.langs.length === 0) {
+      console.log(
+        `Nothing to submit for ${data.key}: group already consumed by an earlier window`,
+      );
       return { status: "empty", reason: "group already consumed" };
     }
     payload = {
@@ -314,7 +317,15 @@ async function submit_group(data: SubmitGroup, job?: Job) {
   const langs = payload.langs.filter((lang) => !already.includes(lang));
   if (langs.length === 0) {
     await store.stat("cache_skipped");
+    console.log(
+      `Nothing to submit for ${payload.obj_url}: all ${payload.langs.length} language(s) already translated for this exact HTML`,
+    );
     return { status: "cached", skipped: payload.langs.length };
+  }
+  if (langs.length < payload.langs.length) {
+    console.log(
+      `Skipping ${payload.langs.length - langs.length} already-translated language(s) for ${payload.obj_url}; submitting ${langs.length}`,
+    );
   }
 
   // Concurrency gate: eTranslation allows 50 active submissions per client and
