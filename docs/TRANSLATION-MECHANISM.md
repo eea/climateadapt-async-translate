@@ -189,6 +189,7 @@ The correlation record (`cca:corr:<token>`) maps the token back to
 | Submission not queued upstream | Counter `not_queued`, requeue with payload. |
 | Any unexpected submit error | Requeue **with payload**, bounded by `ETL_SUBMIT_MAX_ATTEMPTS`, backoff `ETL_ERROR_BACKOFF_MS`. |
 | Language reported failed by eTranslation | `translation_failed` job releases those shares. Counters `failed_languages`, `failed_requests`. |
+| Translation arrives after the source object was edited | Plone's `serial_id` staleness guard refuses the write and the save job fails with `Error in job mismatched serial id`. Correct behaviour — it prevents one revision's text landing under another revision — but the delivered translation is discarded and nothing re-requests it. Observed 60 times in one afternoon of manual editing and re-triggering. |
 | Stale job (older than `ETL_STALE_JOB_MAX_AGE_MS`) | Dropped at collect time and at submit time. Counters `dropped_stale_collect`, `dropped_stale`. |
 | Failure for an unknown token | Counters `failure_unknown_token`, `failure_unattributed`. |
 
@@ -247,12 +248,20 @@ BullMQ's own keys are `bull:<queue>:<state>` — `wait`, `active`, `delayed`,
 ### Counters on `cca:stats`
 
 `groups_scheduled`, `submit_attempts`, `submissions`, `submitted_languages`,
-`quota_exceeded`, `not_queued`, `requeued_error`, `skipped_by_portal`,
-`cache_skipped`, `dropped_stale`, `dropped_stale_collect`, `failed_languages`,
-`failed_requests`, `failure_unknown_token`, `failure_unattributed`.
+`skipped_by_portal`, `cache_skipped`, `dropped_stale`, `dropped_stale_collect`,
+`failed_languages`, `failed_requests`, `failure_unknown_token`,
+`failure_unattributed`.
 
-Healthy sweep: `submissions ≈ submitted_languages / 26`, and
-`quota_exceeded` near zero.
+Requeues are counted as `requeued_<reason>`, where reason is one of
+`at_capacity`, `breaker`, `quota_exceeded`, `not_queued`, `error`. Note that
+`quota_exceeded` and `not_queued` are **also** counted under their own bare
+names, so those two events appear twice — once for the classification, once for
+the requeue. `submit_attempts` counts every execution including requeues, so
+`submissions ≈ submit_attempts - Σ requeued_*`.
+
+Healthy sweep: `submissions ≈ submitted_languages / 26`, `quota_exceeded` near
+zero, and `requeued_at_capacity` low. A high `requeued_at_capacity` is not just
+wasted work — see the fragmentation wart below.
 
 ---
 
@@ -491,6 +500,35 @@ The Plone-side preconditions for `ETL_GROUPING_ENABLED=true`:
 ---
 
 ## 13. Known warts
+
+- **Grouping fragments under capacity pressure.** `readAndCloseGroup` closes the
+  group and clears the armed key before the submit is attempted. If the gate is
+  full, `requeueSubmit` re-queues the **frozen** payload — it does not re-open the
+  group. Any language that arrives after the close therefore arms a *new* window
+  and produces a second submission for the same object. Capacity pressure
+  multiplies submissions, which fills the gate further: a feedback loop.
+
+  Measured on a real run: 52 groups for 7 objects, group sizes
+  `1×22, 2×7, 3×6, 8×1, 18×1, 26×13` — only 13 of 50 submissions were full
+  26-language bundles, averaging 8.4 languages each. That is an ~8× reduction
+  where 26× was intended. `requeued_at_capacity` was 229 at
+  `ETL_MAX_INFLIGHT=10`.
+
+  Fixes, in order of preference: raise `ETL_MAX_INFLIGHT` (cheapest, removes the
+  trigger); on a capacity requeue, put the payload's languages back into the
+  group set so stragglers merge instead of forking; or widen
+  `ETL_GROUP_WINDOW_MS`. Check the group-size distribution before tuning anything
+  else — it is the single number that says whether bundling is actually working:
+
+  ```sh
+  for k in $(redis-cli --scan --pattern 'cca:corr:*'); do
+    redis-cli HGET "$k" langs
+  done | awk -F, '{print NF}' | sort -n | uniq -c
+  ```
+
+- **Stale leases linger in `cca:inflight:idx`.** Harmless — `inFlightCount()`
+  prunes by score before counting — but it means `ZCARD cca:inflight:idx` on its
+  own over-reports. Read `/stats` instead of counting the zset by hand.
 
 - **Quota detection string-matches `-11200`.** Plone flattens the upstream
   failure into a `ValueError` whose message contains `errorCode=-11200`, so the
