@@ -436,6 +436,31 @@ describe("save_translated_html", () => {
     expect(await store.inFlightCount()).toBe(0);
   });
 
+  it("does not cache a save whose translation never registered", async () => {
+    // The portal created an object but the translation manager cannot see it.
+    // Caching this would report "already translated" for the whole skip-cache
+    // TTL while no translation exists, which is how adaptation-in-sectors got
+    // stuck on Turkish for 20 objects.
+    config.groupingEnabled = true;
+    await seedGroup("cca/en/a-page", ["de"]);
+    responses.push({ requestId: 4343 });
+    const submitted: any = await JOBS_MAPPING.submit_group({ key: "cca/en/a-page" });
+
+    responses.push({
+      url: "http://portal/de/page",
+      translation_registered: false,
+      error_type: "translation_not_registered",
+    });
+    await expect(
+      JOBS_MAPPING.save_translated_html({
+        obj_path: `cca-${submitted.token}`, html: "<p>x</p>", language: "de",
+      }),
+    ).rejects.toBe("translation_not_registered");
+
+    expect(await store.translatedLangs(sha())).toEqual([]);
+    expect(await store.inFlightCount()).toBe(0);
+  });
+
   it("keeps working for legacy references already in flight", async () => {
     responses.push({ url: "http://portal/de/page" });
     const result = await JOBS_MAPPING.save_translated_html({

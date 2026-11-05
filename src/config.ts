@@ -66,8 +66,16 @@ export const config = {
   /** Correlation records must outlive the slowest translation round-trip. */
   corrTtlSec: intEnv("ETL_CORR_TTL_SEC", 86_400),
 
-  /** Jobs older than this are dropped instead of submitted. */
-  staleJobMaxAgeMs: intEnv("ETL_STALE_JOB_MAX_AGE_MS", 7 * 86_400),
+  /**
+   * Jobs older than this are dropped instead of submitted. Value is in
+   * milliseconds, so the default is 7 days: 7 * 86_400 * 1000.
+   *
+   * It used to be written `7 * 86_400`, i.e. 604_800 ms = 10.08 minutes. That
+   * silently dropped collected work any time concurrency was low enough for
+   * jobs to legitimately queue longer than ten minutes, which made it look
+   * like lowering ETL_MAX_INFLIGHT caused losses when it only exposed this bug.
+   */
+  staleJobMaxAgeMs: intEnv("ETL_STALE_JOB_MAX_AGE_MS", 7 * 86_400 * 1000),
 
   /**
    * How many times a submission may be retried after an unexpected failure

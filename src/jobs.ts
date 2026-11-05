@@ -524,7 +524,14 @@ async function save_translated_html(data: SaveTranslation, job?: Job) {
     // Only a real save may poison the cache. "canonical object removed",
     // "skipped"/"object_replaced" and a mismatched serial id all mean the
     // translation was discarded and the object should be translated again.
-    if (sha && result.url) {
+    //
+    // `translation_registered` is the portal confirming the translation is
+    // actually reachable through the translation manager. A url alone is not
+    // enough: an object can be created without being registered, and caching
+    // that would block the object+language for the whole skip-cache TTL. The
+    // field is absent on older portals, which must keep working, so only an
+    // explicit false is treated as a failure.
+    if (sha && result.url && result.translation_registered !== false) {
       await store.markTranslated(sha, language);
     }
 
