@@ -1,4 +1,4 @@
-import { JOBS_MAPPING } from "./jobs";
+import { JOBS_MAPPING, runDeliveryWatchdog } from "./jobs";
 import { createBullBoard } from "@bull-board/api";
 import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
 import { FastifyAdapter } from "@bull-board/fastify";
@@ -238,6 +238,30 @@ const run = async () => {
   });
 
   await app.listen({ host: "0.0.0.0", port });
+
+  if (config.watchdogEnabled && enabledQueues.includes(config.submitQueue)) {
+    // eTranslation gives us no way to ask whether a translation it accepted
+    // was ever produced. If a delivery never lands - our callback failed, the
+    // platform dropped a language without reporting it, a submission is stuck
+    // in an upstream backlog - the in-flight lease expires and the pipeline
+    // reports idle while content silently stays untranslated. This is the only
+    // thing that notices.
+    setInterval(async () => {
+      try {
+        const n = await runDeliveryWatchdog();
+        if (n > 0) {
+          console.warn(
+            `event=etl.watchdog.pass resubmitted=${n} ` +
+              `deadline_ms=${config.deliveryDeadlineMs}`,
+          );
+        }
+      } catch (error: any) {
+        console.error(
+          `event=etl.watchdog.pass_error error=${error?.message || error}`,
+        );
+      }
+    }, config.watchdogIntervalMs).unref();
+  }
 
   console.log(`For the UI, open http://localhost:${port}/ui`);
   console.log(

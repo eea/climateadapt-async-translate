@@ -123,6 +123,16 @@ export class FakeRedis implements RedisLike {
     return [...entry.value];
   }
 
+  async srem(key: string, ...members: string[]): Promise<number> {
+    const entry = this.entryFor(key);
+    if (!entry || entry.kind !== "set") return 0;
+    let removed = 0;
+    for (const member of members) {
+      if (entry.value.delete(member)) removed += 1;
+    }
+    return removed;
+  }
+
   // ---------------------------------------------------------------- strings
 
   async set(
@@ -210,5 +220,22 @@ export class FakeRedis implements RedisLike {
       }
     }
     return removed;
+  }
+
+  async zrangebyscore(
+    key: string,
+    min: number | string,
+    max: number | string,
+    limit?: number,
+  ): Promise<string[]> {
+    const entry = this.entryFor(key);
+    if (!entry || entry.kind !== "zset") return [];
+    const low = min === "-inf" ? -Infinity : Number(min);
+    const high = max === "+inf" ? Infinity : Number(max);
+    const hits = [...entry.value.entries()]
+      .filter(([, score]) => score >= low && score <= high)
+      .sort((a, b) => a[1] - b[1])
+      .map(([member]) => member);
+    return limit === undefined ? hits : hits.slice(0, limit);
   }
 }
