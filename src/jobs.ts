@@ -420,6 +420,20 @@ async function submit_group(data: SubmitGroup, job?: Job) {
     langs,
   });
 
+  // The in-flight lease only exists to stop gate slots leaking; it expires
+  // quietly and nothing downstream notices if languages never come back. The
+  // watchdog keeps its own record so overdue deliveries get re-submitted.
+  await store.armWatchdog(token, {
+    obj_url: payload.obj_url,
+    obj_uid: payload.obj_uid,
+    serial_id: payload.serial_id,
+    sha: payload.sha,
+    langs,
+    request_id: requestId,
+    html: payload.html,
+    deadlineMs: config.deliveryDeadlineMs,
+  });
+
   await store.stat("submissions");
   await store.stat("submitted_languages", langs.length);
 
@@ -542,6 +556,7 @@ async function save_translated_html(data: SaveTranslation, job?: Job) {
     // lease expires.
     if (token) {
       const remaining = await store.progress(token, language);
+      await store.noteDelivery(token, language);
       if (remaining !== null) {
         console.log(
           `event=etl.delivered token=${token} language=${language} remaining=${remaining}`,
@@ -642,6 +657,9 @@ async function translation_failed(data: TranslationFailure, job?: Job) {
   let remaining: number | null = null;
   for (const language of langs) {
     remaining = await store.progress(token, language);
+    // A reported failure is a known outcome, not a lost delivery. The portal
+    // and the periodic audit handle it - the watchdog is for the silent ones.
+    await store.noteDelivery(token, language);
   }
 
   await store.stat("failed_languages", langs.length);
@@ -655,6 +673,100 @@ async function translation_failed(data: TranslationFailure, job?: Job) {
   if (job) await job.log(msg);
 
   return { status: "recorded", token, langs, remaining };
+}
+
+export async function runDeliveryWatchdog(): Promise<number> {
+  const store = getStore();
+  const due = await store.dueWatchdogTokens(config.watchdogBatch);
+  if (due.length === 0) return 0;
+
+  let resubmitted = 0;
+  for (const token of due) {
+    try {
+      const rec = await store.watchdogRecord(token);
+      if (!rec) {
+        await store.clearWatchdog(token);
+        continue;
+      }
+
+      const missing = await store.watchdogPending(token);
+      if (missing.length === 0) {
+        await store.clearWatchdog(token);
+        continue;
+      }
+
+      // The portal confirms registration before a language is cached, so a
+      // cached language really was delivered and our noteDelivery hook simply
+      // missed it. Do not burn quota re-asking for it.
+      const already = await store.translatedLangs(rec.sha);
+      const outstanding = missing.filter((lang) => !already.includes(lang));
+      if (outstanding.length === 0) {
+        console.log(
+          `event=etl.watchdog.already_translated token=${token} ` +
+            `obj_url=${rec.obj_url} langs=${missing.join(",")}`,
+        );
+        await store.stat("watchdog_already_translated");
+        await store.clearWatchdog(token);
+        continue;
+      }
+
+      if (rec.attempts >= config.watchdogMaxResubmits) {
+        console.error(
+          `event=etl.watchdog.gave_up token=${token} requestId=${rec.request_id} ` +
+            `obj_url=${rec.obj_url} missing=${outstanding.join(",")} ` +
+            `attempts=${rec.attempts}`,
+        );
+        await store.stat("watchdog_gave_up");
+        await store.clearWatchdog(token);
+        continue;
+      }
+
+      if (!rec.html) {
+        // Without the source we cannot re-submit; the periodic audit is the
+        // only remaining recovery path, so make the loss explicit.
+        console.error(
+          `event=etl.watchdog.no_source token=${token} requestId=${rec.request_id} ` +
+            `obj_url=${rec.obj_url} missing=${outstanding.join(",")}`,
+        );
+        await store.stat("watchdog_no_source");
+        await store.clearWatchdog(token);
+        continue;
+      }
+
+      const payload: GroupPayload = {
+        obj_url: rec.obj_url,
+        obj_uid: rec.obj_uid,
+        serial_id: Number(rec.serial_id) || 0,
+        html: rec.html,
+        langs: outstanding,
+        sha: rec.sha,
+        queued_at: Date.now(),
+      };
+
+      const attempts = await store.bumpWatchdog(token, config.deliveryDeadlineMs);
+      await getSubmitQueue().add(
+        "submit_group",
+        { key: rec.obj_url, payload },
+        { attempts: 1 },
+      );
+      await store.stat("watchdog_resubmits");
+      await store.stat("watchdog_resubmitted_languages", outstanding.length);
+
+      const ageMin = Math.round((Date.now() - rec.submitted_at) / 60_000);
+      console.warn(
+        `event=etl.watchdog.resubmit token=${token} requestId=${rec.request_id} ` +
+          `obj_url=${rec.obj_url} missing=${outstanding.join(",")} age_min=${ageMin} ` +
+          `attempt=${attempts}`,
+      );
+      resubmitted += 1;
+    } catch (error: any) {
+      // Never let one bad record stop the pass.
+      console.error(
+        `event=etl.watchdog.error token=${token} error=${error?.message || error}`,
+      );
+    }
+  }
+  return resubmitted;
 }
 
 export const JOBS_MAPPING: TypeJobsMapping = {

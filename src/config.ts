@@ -67,6 +67,31 @@ export const config = {
   corrTtlSec: intEnv("ETL_CORR_TTL_SEC", 86_400),
 
   /**
+   * Delivery watchdog. eTranslation has no per-request status endpoint, so a
+   * delivery that never arrives is invisible: the in-flight lease expires, the
+   * gate frees its slot, and the pipeline reports idle while content stays
+   * untranslated. Any requested language still missing this long after
+   * submission is re-submitted.
+   *
+   * Keep this well above normal round-trip time (observed 1-10 minutes) so the
+   * watchdog never races a delivery that is merely slow, and well below
+   * corrTtlSec so the record still exists when it fires.
+   */
+  deliveryDeadlineMs: intEnv("ETL_DELIVERY_DEADLINE_MS", 45 * 60_000),
+
+  /** How often the watchdog scans for overdue deliveries. */
+  watchdogIntervalMs: intEnv("ETL_WATCHDOG_INTERVAL_MS", 60_000),
+
+  /** Languages still missing after this many re-submissions are given up on. */
+  watchdogMaxResubmits: intEnv("ETL_WATCHDOG_MAX_RESUBMITS", 2),
+
+  /** Batch size per watchdog pass. */
+  watchdogBatch: intEnv("ETL_WATCHDOG_BATCH", 25),
+
+  /** Kill switch for the delivery watchdog. */
+  watchdogEnabled: boolEnv("ETL_WATCHDOG_ENABLED", true),
+
+  /**
    * Jobs older than this are dropped instead of submitted. Value is in
    * milliseconds, so the default is 7 days: 7 * 86_400 * 1000.
    *

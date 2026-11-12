@@ -39,6 +39,13 @@ export interface RedisLike {
   zrem(key: string, member: string): Promise<number>;
   zcard(key: string): Promise<number>;
   zremrangebyscore(key: string, min: number | string, max: number | string): Promise<number>;
+  zrangebyscore(
+    key: string,
+    min: number | string,
+    max: number | string,
+    limit?: number,
+  ): Promise<string[]>;
+  srem(key: string, ...members: string[]): Promise<number>;
   rename(key: string, target: string): Promise<string>;
 }
 
@@ -67,8 +74,12 @@ const langsKey = (key: string) => `${PREFIX}:grp:${key}:langs`;
 const armedKey = (key: string) => `${PREFIX}:grp:${key}:armed`;
 const corrKey = (token: string) => `${PREFIX}:corr:${token}`;
 const inflightKey = (token: string) => `${PREFIX}:inflight:${token}`;
+const watchKey = (token: string) => `${PREFIX}:watch:${token}`;
+const watchPendingKey = (token: string) => `${PREFIX}:watch:${token}:pending`;
+const watchHtmlKey = (token: string) => `${PREFIX}:watch:${token}:html`;
 const doneKey = (sha: string) => `${PREFIX}:done:${sha}`;
 const INDEX_KEY = `${PREFIX}:inflight:idx`;
+const WATCH_INDEX_KEY = `${PREFIX}:watch:idx`;
 const BREAKER_KEY = `${PREFIX}:breaker`;
 const STATS_KEY = `${PREFIX}:stats`;
 
@@ -273,6 +284,114 @@ export class QuotaStore {
     const data = await this.r.hgetall(corrKey(token));
     if (!data || !data.path) return null;
     return { token, ...data } as Correlation;
+  }
+
+  // ---------------------------------------------------------- delivery watchdog
+  //
+  // eTranslation is fully asynchronous and has no per-request status endpoint.
+  // If a delivery never arrives - our callback failed and we answered 200, the
+  // platform dropped a language without reporting it, or a submission is still
+  // sitting in an upstream backlog - nothing else in the system ever notices.
+  // The in-flight lease expires and the gate frees its slot, so the pipeline
+  // looks idle while content silently stays untranslated.
+  //
+  // The watchdog keeps its own record, independent of the gate's short lease,
+  // holding enough of the original payload to re-submit the languages that
+  // never came back.
+
+  /** Start tracking a submission's deliveries. */
+  async armWatchdog(
+    token: string,
+    meta: {
+      obj_url: string;
+      obj_uid: string;
+      serial_id: string | number;
+      sha: string;
+      langs: string[];
+      request_id: string;
+      html: string;
+      deadlineMs: number;
+    },
+  ): Promise<void> {
+    const key = watchKey(token);
+    const now = this.now();
+    const ttl = this.cfg.corrTtlSec;
+    await this.r.hset(key, {
+      obj_url: meta.obj_url,
+      obj_uid: meta.obj_uid,
+      serial_id: String(meta.serial_id),
+      sha: meta.sha,
+      langs: meta.langs.join(","),
+      request_id: meta.request_id,
+      submitted_at: String(now),
+      attempts: "0",
+    });
+    await this.r.expire(key, ttl);
+    await this.r.sadd(watchPendingKey(token), ...meta.langs);
+    await this.r.expire(watchPendingKey(token), ttl);
+    if (meta.html) {
+      await this.r.set(watchHtmlKey(token), meta.html, "EX", ttl);
+    }
+    await this.r.zadd(WATCH_INDEX_KEY, now + meta.deadlineMs, token);
+  }
+
+  /** One requested language arrived. */
+  async noteDelivery(token: string, language: string): Promise<void> {
+    if (!token || !language) return;
+    await this.r.srem(watchPendingKey(token), language);
+  }
+
+  async clearWatchdog(token: string): Promise<void> {
+    await this.r.zrem(WATCH_INDEX_KEY, token);
+    await this.r.del(watchKey(token), watchPendingKey(token), watchHtmlKey(token));
+  }
+
+  /** Tokens whose delivery deadline has passed. */
+  async dueWatchdogTokens(limit = 25): Promise<string[]> {
+    return this.r.zrangebyscore(WATCH_INDEX_KEY, 0, this.now(), limit);
+  }
+
+  async watchdogPending(token: string): Promise<string[]> {
+    return this.r.smembers(watchPendingKey(token));
+  }
+
+  async watchdogRecord(
+    token: string,
+  ): Promise<{
+    obj_url: string;
+    obj_uid: string;
+    serial_id: string;
+    sha: string;
+    langs: string[];
+    request_id: string;
+    submitted_at: number;
+    attempts: number;
+    html: string;
+  } | null> {
+    const data = await this.r.hgetall(watchKey(token));
+    if (!data || !data.obj_url) return null;
+    return {
+      obj_url: data.obj_url,
+      obj_uid: data.obj_uid || "",
+      serial_id: data.serial_id || "0",
+      sha: data.sha || "",
+      langs: (data.langs || "").split(",").filter(Boolean),
+      request_id: data.request_id || "",
+      submitted_at: Number(data.submitted_at || 0),
+      attempts: Number(data.attempts || 0),
+      html: (await this.r.get(watchHtmlKey(token))) || "",
+    };
+  }
+
+  /** Count a re-submission and re-arm the deadline. */
+  async bumpWatchdog(token: string, deadlineMs: number): Promise<number> {
+    const attempts = await this.r.hincrby(watchKey(token), "attempts", 1);
+    const ttl = this.cfg.corrTtlSec;
+    await this.r.expire(watchKey(token), ttl);
+    await this.r.expire(watchPendingKey(token), ttl);
+    await this.r.expire(watchHtmlKey(token), ttl);
+    await this.r.zadd(WATCH_INDEX_KEY, this.now() + deadlineMs, token);
+    return attempts;
   }
 
   // ------------------------------------------------------------------- cache
