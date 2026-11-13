@@ -226,16 +226,35 @@ export class FakeRedis implements RedisLike {
     key: string,
     min: number | string,
     max: number | string,
-    limit?: number,
+    ...args: Array<string | number>
   ): Promise<string[]> {
     const entry = this.entryFor(key);
     if (!entry || entry.kind !== "zset") return [];
     const low = min === "-inf" ? -Infinity : Number(min);
     const high = max === "+inf" ? Infinity : Number(max);
+
+    // Model the real wire syntax: ZRANGEBYSCORE key min max [WITHSCORES]
+    // [LIMIT offset count]. A bare numeric fourth argument is a syntax error in
+    // Redis, so the fake must reject it too - otherwise a malformed call passes
+    // unit tests and fails in production.
+    let offset = 0;
+    let count = Infinity;
+    if (args.length > 0) {
+      const withScores = args.includes("WITHSCORES");
+      const li = args.indexOf("LIMIT");
+      if (withScores || li === -1) {
+        throw new Error(
+          `ERR syntax error: ZRANGEBYSCORE ${min} ${max} ${args.join(" ")}`,
+        );
+      }
+      offset = Number(args[li + 1]);
+      count = Number(args[li + 2]);
+    }
+
     const hits = [...entry.value.entries()]
       .filter(([, score]) => score >= low && score <= high)
       .sort((a, b) => a[1] - b[1])
       .map(([member]) => member);
-    return limit === undefined ? hits : hits.slice(0, limit);
+    return hits.slice(offset, Number.isFinite(count) ? offset + count : undefined);
   }
 }
