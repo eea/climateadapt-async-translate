@@ -43,7 +43,7 @@ export interface RedisLike {
     key: string,
     min: number | string,
     max: number | string,
-    limit?: number,
+    ...args: Array<string | number>
   ): Promise<string[]>;
   srem(key: string, ...members: string[]): Promise<number>;
   rename(key: string, target: string): Promise<string>;
@@ -348,7 +348,12 @@ export class QuotaStore {
 
   /** Tokens whose delivery deadline has passed. */
   async dueWatchdogTokens(limit = 25): Promise<string[]> {
-    return this.r.zrangebyscore(WATCH_INDEX_KEY, 0, this.now(), limit);
+    if (limit <= 0) return this.r.zrangebyscore(WATCH_INDEX_KEY, 0, this.now());
+    // The LIMIT keyword is part of the wire syntax - ZRANGEBYSCORE key min max
+    // LIMIT offset count. Passing the count as a bare fourth argument is a
+    // syntax error, which is exactly how this silently failed in production
+    // while the unit tests passed.
+    return this.r.zrangebyscore(WATCH_INDEX_KEY, 0, this.now(), "LIMIT", 0, limit);
   }
 
   async watchdogPending(token: string): Promise<string[]> {

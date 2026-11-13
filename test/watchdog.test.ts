@@ -131,6 +131,36 @@ describe("delivery watchdog", () => {
     expect((await store.dueWatchdogTokens(2)).length).toBe(2);
     expect((await store.dueWatchdogTokens()).length).toBe(5);
   });
+
+  it("uses the LIMIT keyword, not a bare count", async () => {
+    // Regression: ZRANGEBYSCORE key min max <n> is a syntax error in real
+    // Redis. It raised ERR syntax error every 60s in production while the
+    // tests passed, because the fake accepted the malformed call.
+    for (let i = 0; i < 4; i++) {
+      await store.armWatchdog(`tok-${i}`, META);
+    }
+    redis.advance(60 * 60_000);
+    let syntaxOk = true;
+    try {
+      await store.dueWatchdogTokens(2);
+    } catch {
+      syntaxOk = false;
+    }
+    expect(syntaxOk).toBe(true);
+
+    // The fake must reject the malformed form, or this guard is worthless.
+    await expect(
+      redis.zrangebyscore("cca:watch:idx", 0, redis.now(), 2),
+    ).rejects.toThrow(/syntax error/i);
+  });
+
+  it("returns every due token when the limit is not positive", async () => {
+    for (let i = 0; i < 3; i++) {
+      await store.armWatchdog(`tok-${i}`, META);
+    }
+    redis.advance(60 * 60_000);
+    expect((await store.dueWatchdogTokens(0)).length).toBe(3);
+  });
 });
 
 describe("runDeliveryWatchdog", () => {
